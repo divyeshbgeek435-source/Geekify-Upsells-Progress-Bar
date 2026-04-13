@@ -5,43 +5,60 @@ generator client {
   provider = "prisma-client-js"
 }
 
-// Note that some adapters may set a maximum length for the String type by default, please ensure your strings are long
-// enough when changing adapters.
-// See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
+// SQLite file lives next to this schema (see .gitignore: prisma/dev.sqlite). For PostgreSQL/MySQL, change provider and url.
 datasource db {
   provider = "sqlite"
-  url      = "file:dev.sqlite"
+  url      = "file:./dev.sqlite"
 }
 
 model CartAccessLog {
-  id              String   @id @default(cuid())
-  shop            String
-  itemCount       Int?
-  subtotalCents   Int?
-  currency        String?
-  pathname        String?
-  source          String?
-  createdAt       DateTime @default(now())
+  id            String   @id @default(cuid())
+  shop          String
+  itemCount     Int?
+  subtotalCents Int?
+  currency      String?
+  pathname      String?
+  source        String?
+  createdAt     DateTime @default(now())
 
   @@index([shop, createdAt])
 }
 
+// https://www.npmjs.com/package/@shopify/shopify-app-session-storage-prisma
 model Session {
-  id            String    @id
-  shop          String
-  state         String
-  isOnline      Boolean   @default(false)
-  scope         String?
-  expires       DateTime?
-  accessToken   String
-  userId        BigInt?
-  firstName     String?
-  lastName      String?
-  email         String?
-  accountOwner  Boolean   @default(false)
-  locale        String?
-  collaborator  Boolean?  @default(false)
-  emailVerified Boolean?  @default(false)
+  id                  String    @id
+  shop                String
+  state               String
+  isOnline            Boolean   @default(false)
+  scope               String?
+  expires             DateTime?
+  accessToken         String
+  userId              BigInt?
+  firstName           String?
+  lastName            String?
+  email               String?
+  accountOwner        Boolean   @default(false)
+  locale              String?
+  collaborator        Boolean?  @default(false)
+  emailVerified       Boolean?  @default(false)
   refreshToken        String?
   refreshTokenExpires DateTime?
+}
+
+model AnnouncementBar {
+  id           String   @id @default(cuid())
+  shop         String
+  name         String
+  active       Boolean  @default(true)
+  barType      String
+  configJson   String   @default("{}")
+  /// Storefront markup when using custom mode (fetched by theme script).
+  customHtml   String   @default("")
+  /// Liquid rendered on the app server when serving the bar (optional).
+  customLiquid String   @default("")
+  customCss    String   @default("")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([shop])
 }

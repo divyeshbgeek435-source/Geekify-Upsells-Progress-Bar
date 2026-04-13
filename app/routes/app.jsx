@@ -65,6 +65,7 @@ export default function App() {
         <s-link href={withShopifyParams("/app")}>Home</s-link>
         <s-link href={withShopifyParams("/app/discounts")}>Discounts</s-link>
         <s-link href={withShopifyParams("/app/additional")}>Additional page</s-link>
+        <s-link href={withShopifyParams("/app/announcement-bars")}>Announcement bars</s-link>
       </s-app-nav>
       <Outlet context={{ onboarding }} />
     </AppProvider>

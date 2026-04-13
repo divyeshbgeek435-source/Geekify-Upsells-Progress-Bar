@@ -1,0 +1,36 @@
+{{ 'announcement-bar.css' | asset_url | stylesheet_tag }}
+
+<script
+  src="{{ 'announcement-bar.js' | asset_url }}"
+  data-sce-announcement=""
+  data-bar-id="{{ block.settings.bar_id | escape }}"
+  data-api-url="{{ shop.secure_url }}/apps/sce/announcement-bar"
+  data-z-index="{{ block.settings.z_index }}"
+  defer
+></script>
+
+{% schema %}
+{
+  "name": "Announcement bar (embed)",
+  "target": "body",
+  "settings": [
+    {
+      "type": "paragraph",
+      "content": "Enable under Theme settings → App embeds. Paste a unique announcement ID from the app to pin one bar, or leave empty to use the shop’s active announcement."
+    },
+    {
+      "type": "text",
+      "id": "bar_id",
+      "label": "Announcement ID from app",
+      "info": "Unique ID from Announcement bars → Copy ID. Empty = active announcement for this shop."
+    },
+    {
+      "type": "number",
+      "id": "z_index",
+      "label": "Z-index",
+      "default": 1000000,
+      "info": "Use a large value (e.g. 1000000). Very low values hide the bar behind the header."
+    }
+  ]
+}
+{% endschema %}

@@ -1,0 +1,104 @@
+.sce-announcement-bar {
+  box-sizing: border-box;
+  width: 100%;
+  left: 0;
+  right: 0;
+  font-family: var(--sce-ab-font-family, inherit);
+  -webkit-font-smoothing: antialiased;
+}
+
+.sce-announcement-bar--sticky {
+  position: fixed;
+  top: 0;
+  z-index: var(--sce-ab-z, 1000);
+}
+
+/* Theme app block: bar lives inside the block hook (normal document flow). */
+.sce-announcement-bar--inline {
+  position: relative;
+  width: 100%;
+  z-index: var(--sce-ab-z, 10);
+}
+
+.sce-announcement-bar__inner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 100%;
+}
+
+.sce-announcement-bar__text-wrap {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.sce-announcement-bar__marquee {
+  overflow: hidden;
+  width: 100%;
+}
+
+.sce-announcement-bar__track {
+  display: inline-flex;
+  white-space: nowrap;
+  will-change: transform;
+  animation: sce-ab-marquee var(--sce-ab-marquee-duration, 22s) linear infinite;
+}
+
+.sce-announcement-bar__track:hover {
+  animation-play-state: paused;
+}
+
+@keyframes sce-ab-marquee {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+.sce-announcement-bar__link {
+  color: inherit;
+  text-decoration: var(--sce-ab-link-decoration, underline);
+}
+
+.sce-announcement-bar__link:hover {
+  opacity: 0.9;
+}
+
+.sce-announcement-bar__dismiss {
+  flex: 0 0 auto;
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 4px 8px;
+  margin: 0;
+  font-size: 1.1em;
+  line-height: 1;
+  opacity: 0.75;
+}
+
+.sce-announcement-bar__dismiss:hover {
+  opacity: 1;
+}
+
+.sce-announcement-bar__rotate {
+  display: block;
+  width: 100%;
+  text-align: inherit;
+}
+
+.sce-announcement-bar__spacer {
+  display: block;
+  height: var(--sce-ab-height, 0px);
+  pointer-events: none;
+}
+
+body.sce-announcement-bar--sticky-pad {
+  /* Set by script to bar offset to reduce layout jump */
+}

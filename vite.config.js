@@ -36,6 +36,14 @@ if (host === "localhost") {
 }
 
 export default defineConfig({
+  // Prisma must load the Node client (`.prisma/client/default`), not `index-browser.js`,
+  // or delegates like `announcementBar.findMany` are missing and db.server throws.
+  ssr: {
+    external: ["@prisma/client"],
+    resolve: {
+      conditions: ["node", "import", "module", "default"],
+    },
+  },
   server: {
     allowedHosts: [host],
     cors: {
