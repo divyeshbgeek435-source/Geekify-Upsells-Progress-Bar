@@ -14,11 +14,14 @@
   if (!script || !script.dataset) return;
   script.setAttribute("data-sce-ab-ran", "1");
 
-  var barId = (script.dataset.barId || "").trim();
+  var sectionId = (script.dataset.sectionId || "").trim();
   var apiUrl = (script.dataset.apiUrl || "").trim();
   var zIndex = parseInt(String(script.dataset.zIndex || "1000"), 10) || 1000;
 
   if (!apiUrl) return;
+  var refreshIntervalMs = 30000;
+  var lastRenderVersion = "";
+  var managedIntervals = [];
 
   var hookId = (script.dataset.sceAbHook || "").trim();
   var placement = String(script.dataset.placement || "sticky")
@@ -114,6 +117,10 @@
   }
 
   function removeExisting() {
+    for (var i = 0; i < managedIntervals.length; i++) {
+      clearInterval(managedIntervals[i]);
+    }
+    managedIntervals = [];
     var sp = document.querySelector("[data-sce-announcement-spacer]");
     if (sp) sp.remove();
     document.querySelectorAll("[data-sce-announcement-root]").forEach(function (root) {
@@ -128,8 +135,18 @@
     document.body.classList.remove("sce-announcement-bar--sticky-pad");
   }
 
+  function setManagedInterval(fn, ms) {
+    var id = setInterval(fn, ms);
+    managedIntervals.push(id);
+    return id;
+  }
+
   function applyBarStyles(el, cfg) {
+    var messageCount = Array.isArray(cfg.messages) ? cfg.messages.length : 1;
+    var dynamicGapPx = messageCount > 4 ? 10 : messageCount > 2 ? 12 : 14;
     el.style.setProperty("--sce-ab-z", String(zIndex));
+    el.style.setProperty("--sce-ab-message-gap", dynamicGapPx + "px");
+    el.style.setProperty("--sce-ab-message-max-inline", "100%");
     el.style.backgroundColor = cfg.backgroundColor;
     el.style.color = cfg.textColor;
     el.style.borderStyle = cfg.borderWidthPx > 0 ? "solid" : "none";
@@ -169,7 +186,31 @@
     return esc;
   }
 
-  function innerWrap(cfg, bodyHtml) {
+  function messagesStackAlignClass(cfg) {
+    var align = String(cfg.textAlign || "center").toLowerCase();
+    if (align === "left" || align === "start") return "sce-announcement-bar__messages-stack--start";
+    if (align === "right" || align === "end") return "sce-announcement-bar__messages-stack--end";
+    return "sce-announcement-bar__messages-stack--center";
+  }
+
+  function buildMessagesStackHtml(cfg) {
+    var mod = messagesStackAlignClass(cfg);
+    var parts = [];
+    for (var i = 0; i < cfg.messages.length; i++) {
+      parts.push(
+        '<div class="sce-announcement-bar__message-line">' +
+          buildTextHtml(cfg, cfg.messages[i] || "") +
+          "</div>",
+      );
+    }
+    return (
+      '<div class="sce-announcement-bar__messages-stack ' + mod + '">' + parts.join("") + "</div>"
+    );
+  }
+
+  function innerWrap(cfg, bodyHtml, textWrapExtraClass) {
+    var wrapClass = "sce-announcement-bar__text-wrap";
+    if (textWrapExtraClass) wrapClass += " " + String(textWrapExtraClass).trim();
     var max =
       cfg.maxContentWidthPx > 0
         ? ' style="max-width:' + cfg.maxContentWidthPx + "px;margin-left:auto;margin-right:auto\""
@@ -178,7 +219,9 @@
       '<div class="sce-announcement-bar__inner"' +
       max +
       ">" +
-      '<div class="sce-announcement-bar__text-wrap">' +
+      '<div class="' +
+      wrapClass +
+      '">' +
       bodyHtml +
       "</div>" +
       (cfg.dismissible
@@ -188,13 +231,23 @@
     );
   }
 
-  function mountStickyBar(cfg, innerHtml) {
+  function applyDomSectionId(el, sectionHtmlId) {
+    var sid = String(sectionHtmlId || "").trim();
+    if (sid && /^[A-Za-z][A-Za-z0-9_-]*$/.test(sid)) {
+      el.id = sid;
+    } else {
+      el.removeAttribute("id");
+    }
+  }
+
+  function mountStickyBar(cfg, innerHtml, sectionHtmlId) {
     removeExisting();
     var bar = document.createElement("div");
     bar.className = "sce-announcement-bar sce-announcement-bar--sticky";
     bar.setAttribute("data-sce-announcement-root", "1");
     bar.setAttribute("role", "region");
     bar.setAttribute("aria-label", "Announcement");
+    applyDomSectionId(bar, sectionHtmlId);
     applyBarStyles(bar, cfg);
     bar.innerHTML = innerHtml;
     document.body.insertBefore(bar, document.body.firstChild);
@@ -211,7 +264,7 @@
   }
 
   /** Renders inside the theme app block hook so the editor shows real content. */
-  function mountInlineBar(anchor, cfg, innerHtml) {
+  function mountInlineBar(anchor, cfg, innerHtml, sectionHtmlId) {
     removeExisting();
     anchor.innerHTML = "";
     anchor.style.minHeight = "";
@@ -220,6 +273,7 @@
     bar.setAttribute("data-sce-announcement-root", "1");
     bar.setAttribute("role", "region");
     bar.setAttribute("aria-label", "Announcement");
+    applyDomSectionId(bar, sectionHtmlId);
     applyBarStyles(bar, cfg);
     bar.innerHTML = innerHtml;
     anchor.appendChild(bar);
@@ -254,19 +308,21 @@
     document.head.appendChild(st);
   }
 
-  function showCustomMarkup(cfg, innerMarkup, dismissKey, inlineAnchor) {
+  function showCustomMarkup(cfg, innerMarkup, dismissKey, inlineAnchor, sectionHtmlId) {
     var mount =
       inlineAnchor && document.body.contains(inlineAnchor)
         ? function (c, html) {
-            return mountInlineBar(inlineAnchor, c, html);
+            return mountInlineBar(inlineAnchor, c, html, sectionHtmlId);
           }
-        : mountStickyBar;
+        : function (c, html) {
+            return mountStickyBar(c, html, sectionHtmlId);
+          };
     var html = innerWrap(cfg, innerMarkup);
     var root = mount(cfg, html);
     bindDismiss(root, cfg, dismissKey);
   }
 
-  function show(barType, cfg, dismissKey, inlineAnchor) {
+  function show(barType, cfg, dismissKey, inlineAnchor, sectionHtmlId) {
     try {
       if (cfg.dismissible && sessionStorage.getItem(dismissKey) === "1") return;
     } catch (e) {}
@@ -274,12 +330,15 @@
     var mount =
       inlineAnchor && document.body.contains(inlineAnchor)
         ? function (c, html) {
-            return mountInlineBar(inlineAnchor, c, html);
+            return mountInlineBar(inlineAnchor, c, html, sectionHtmlId);
           }
-        : mountStickyBar;
+        : function (c, html) {
+            return mountStickyBar(c, html, sectionHtmlId);
+          };
 
     if (barType === "marquee") {
-      var sep = ' <span aria-hidden="true">&nbsp;•&nbsp;</span> ';
+      /* En spaces around bullet: readable gap without HTML tags. */
+      var sep = "\u2002\u2022\u2002";
       var text = cfg.messages.join(sep);
       var doubled = buildTextHtml(cfg, text) + sep + buildTextHtml(cfg, text);
       var html = innerWrap(
@@ -289,6 +348,7 @@
           's">' +
           doubled +
           "</div></div>",
+        "sce-announcement-bar__text-wrap--marquee",
       );
       var root = mount(cfg, html);
       bindDismiss(root, cfg, dismissKey);
@@ -296,37 +356,48 @@
     }
 
     if (barType === "rotating") {
+      var rotMod = messagesStackAlignClass(cfg);
       var htmlR = innerWrap(
         cfg,
         '<div class="sce-announcement-bar__rotate">' +
+          '<div class="sce-announcement-bar__messages-stack ' +
+          rotMod +
+          '">' +
+          '<div class="sce-announcement-bar__message-line">' +
           buildTextHtml(cfg, cfg.messages[0] || "") +
-          "</div>",
+          "</div></div></div>",
       );
       var rootR = mount(cfg, htmlR);
       var rot = rootR.querySelector(".sce-announcement-bar__rotate");
       if (rot && cfg.messages.length > 1) {
         var idx = 0;
-        setInterval(function () {
+        setManagedInterval(function () {
           idx = (idx + 1) % cfg.messages.length;
-          rot.innerHTML = buildTextHtml(cfg, cfg.messages[idx] || "");
+          rot.innerHTML =
+            '<div class="sce-announcement-bar__messages-stack ' +
+            messagesStackAlignClass(cfg) +
+            '">' +
+            '<div class="sce-announcement-bar__message-line">' +
+            buildTextHtml(cfg, cfg.messages[idx] || "") +
+            "</div></div>";
         }, cfg.rotateIntervalMs);
       }
       bindDismiss(rootR, cfg, dismissKey);
       return;
     }
 
-    var msg = cfg.messages[0] || "";
-    var rootS = mount(cfg, innerWrap(cfg, buildTextHtml(cfg, msg)));
+    var rootS = mount(cfg, innerWrap(cfg, buildMessagesStackHtml(cfg)));
     bindDismiss(rootS, cfg, dismissKey);
   }
 
   var url = apiUrl;
-  if (barId) {
+  if (sectionId) {
     var joinChar = apiUrl.indexOf("?") >= 0 ? "&" : "?";
-    url = apiUrl + joinChar + "id=" + encodeURIComponent(barId);
+    url = apiUrl + joinChar + "sectionId=" + encodeURIComponent(sectionId);
   }
 
-  fetch(url, { credentials: "same-origin", headers: { Accept: "application/json" } })
+  function fetchAnnouncementData() {
+    return fetch(url, { credentials: "same-origin", headers: { Accept: "application/json" } })
     .then(function (r) {
       var ct = (r.headers.get("content-type") || "").toLowerCase();
       if (ct.indexOf("application/json") === -1) {
@@ -343,39 +414,75 @@
       return r.json().then(function (data) {
         return { status: r.status, data: data };
       });
-    })
-    .then(function (wrapped) {
-      if (!wrapped || !wrapped.data) return;
-      var data = wrapped.data;
-      if (!data.ok) {
-        console.warn(
-          "[SCE announcement bar]",
-          data.error || "error",
-          wrapped.status,
-          data.hint || "",
-          "Request URL:",
-          url,
-        );
-        showInlineError(
-          "Announcement not found. Check Bar ID and make sure the bar is Active in app admin.",
-        );
-        return;
-      }
-      var resolvedId = String(data.id || barId || "");
-      var dismissKey = "sce_ab_dismiss_" + (resolvedId || "unknown");
-      var cfg = mergeConfig(data.config || {});
-      var barType = String(data.barType || "sticky");
-      var customHtml = String(data.customHtml || "").trim();
-      var customCss = String(data.customCss || "").trim();
-      injectCustomCss(resolvedId, customCss);
-      if (customHtml) {
-        showCustomMarkup(cfg, customHtml, dismissKey, inlineAnchor);
-        return;
-      }
-      show(barType, cfg, dismissKey, inlineAnchor);
-    })
-    .catch(function (err) {
-      console.warn("[SCE announcement bar] Request failed", err && err.message ? err.message : err);
-      showInlineError("Request failed. Check app dev server is running and refresh preview.");
     });
+  }
+
+  function dataVersion(data) {
+    if (!data || typeof data !== "object") return "";
+    if (data.version) return String(data.version);
+    return JSON.stringify({
+      id: data.id || "",
+      sectionHtmlId: data.sectionHtmlId || "",
+      barType: data.barType || "",
+      config: data.config || {},
+      customHtml: data.customHtml || "",
+      customCss: data.customCss || "",
+    });
+  }
+
+  function renderFromData(data) {
+    var resolvedId = String(data.id || "");
+    var dismissKey = "sce_ab_dismiss_" + (resolvedId || "unknown");
+    var cfg = mergeConfig(data.config || {});
+    var barType = String(data.barType || "sticky");
+    var customHtml = String(data.customHtml || "").trim();
+    var customCss = String(data.customCss || "").trim();
+    var sectionHtmlId = String(data.sectionHtmlId || "").trim();
+    injectCustomCss(resolvedId, customCss);
+    if (customHtml) {
+      showCustomMarkup(cfg, customHtml, dismissKey, inlineAnchor, sectionHtmlId);
+      return;
+    }
+    show(barType, cfg, dismissKey, inlineAnchor, sectionHtmlId);
+  }
+
+  function refreshAnnouncement() {
+    if (!sectionId) {
+      removeExisting();
+      showInlineError("Set a Section ID in this block to render an announcement.");
+      return;
+    }
+    fetchAnnouncementData()
+      .then(function (wrapped) {
+        if (!wrapped || !wrapped.data) return;
+        var data = wrapped.data;
+        if (!data.ok) {
+          console.warn(
+            "[SCE announcement bar]",
+            data.error || "error",
+            wrapped.status,
+            data.hint || "",
+            "Request URL:",
+            url,
+          );
+          showInlineError(
+            "Announcement not found. Check Bar ID and make sure the bar is Active in app admin.",
+          );
+          return;
+        }
+        var nextVersion = dataVersion(data);
+        if (nextVersion && nextVersion === lastRenderVersion) return;
+        renderFromData(data);
+        lastRenderVersion = nextVersion;
+      })
+      .catch(function (err) {
+        console.warn("[SCE announcement bar] Request failed", err && err.message ? err.message : err);
+        if (!lastRenderVersion) {
+          showInlineError("Request failed. Check app dev server is running and refresh preview.");
+        }
+      });
+  }
+
+  refreshAnnouncement();
+  setInterval(refreshAnnouncement, refreshIntervalMs);
 })();

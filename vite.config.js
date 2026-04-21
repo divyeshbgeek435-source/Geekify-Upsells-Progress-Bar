@@ -42,6 +42,8 @@ export default defineConfig({
     external: ["@prisma/client"],
     resolve: {
       conditions: ["node", "import", "module", "default"],
+      /** Prefer the Node engine for externals (avoids the browser `Prisma = {}` stub). */
+      externalConditions: ["node"],
     },
   },
   server: {

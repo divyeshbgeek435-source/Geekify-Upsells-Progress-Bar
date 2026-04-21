@@ -8,7 +8,7 @@
 }
 
 .sce-announcement-bar--sticky {
-  position: fixed;
+  /* position: fixed; */
   top: 0;
   z-index: var(--sce-ab-z, 1000);
 }
@@ -32,7 +32,46 @@
 .sce-announcement-bar__text-wrap {
   flex: 1 1 auto;
   min-width: 0;
+}
+
+/* Marquee needs clipping; sticky/rotating stacks can grow vertically. */
+.sce-announcement-bar__text-wrap--marquee {
   overflow: hidden;
+}
+
+/* Stacked messages (sticky / rotating): fixed vertical rhythm, no separator between lines. */
+.sce-announcement-bar__messages-stack {
+  --sce-ab-message-gap: clamp(12px, 0.75rem + 1vw, 16px);
+  --sce-ab-message-max-inline: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sce-ab-message-gap);
+  width: 100%;
+  min-width: 0;
+}
+
+/* Logical alignment (LTR-friendly; works with RTL document direction). */
+.sce-announcement-bar__messages-stack--start {
+  align-items: start;
+}
+
+.sce-announcement-bar__messages-stack--center {
+  align-items: center;
+}
+
+.sce-announcement-bar__messages-stack--end {
+  align-items: end;
+}
+
+.sce-announcement-bar__message-line {
+  box-sizing: border-box;
+  width: fit-content;
+  max-width: var(--sce-ab-message-max-inline);
+  max-inline-size: var(--sce-ab-message-max-inline);
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .sce-announcement-bar__marquee {
@@ -90,6 +129,7 @@
 .sce-announcement-bar__rotate {
   display: block;
   width: 100%;
+  min-width: 0;
   text-align: inherit;
 }
 
@@ -97,8 +137,4 @@
   display: block;
   height: var(--sce-ab-height, 0px);
   pointer-events: none;
-}
-
-body.sce-announcement-bar--sticky-pad {
-  /* Set by script to bar offset to reduce layout jump */
 }

@@ -1,0 +1,42 @@
+{% comment %}
+  Loads the popup design saved in the app (Popup design page). Paste the Popup design ID from the app;
+  the modal appears on the storefront only when this ID matches the saved configuration.
+{% endcomment %}
+
+<div
+  id="sce-popup-hook-{{ block.id }}"
+  class="sce-popup-block-hook"
+  {{ block.shopify_attributes }}
+  style="display: none;"
+></div>
+
+{{ 'popup-design.css' | asset_url | stylesheet_tag }}
+
+<script
+  src="{{ 'popup-design.js' | asset_url }}"
+  data-sce-popup=""
+  data-sce-popup-block-id="{{ block.id }}"
+  data-sce-popup-hook="sce-popup-hook-{{ block.id }}"
+  data-sce-popup-design-id="{{ block.settings.popup_design_id | escape }}"
+  data-api-url="{{ shop.secure_url }}/apps/sce/popup-design?popup_design_id={{ block.settings.popup_design_id | url_encode }}"
+  defer
+></script>
+
+{% schema %}
+{
+  "name": "Popup design",
+  "target": "section",
+  "settings": [
+    {
+      "type": "paragraph",
+      "content": "Create popups in the app (Popup design). Paste the Popup design ID for the popup this block should load. You can add multiple blocks for different popups. Leave the ID empty only if you have exactly one saved popup (legacy)."
+    },
+    {
+      "type": "text",
+      "id": "popup_design_id",
+      "label": "Popup design ID",
+      "info": "Must match the ID from the app (Popup design page), same workflow as the Additional UI bar Section ID."
+    }
+  ]
+}
+{% endschema %}

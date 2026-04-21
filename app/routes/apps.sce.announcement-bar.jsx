@@ -1,66 +1,65 @@
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
+import { parseConfig } from "../lib/announcement-bar-config.js";
 import { renderAnnouncementLiquid } from "../utils/announcementLiquid";
-import { enforceSingleActiveAnnouncementBar } from "../utils/announcementBarActive.server";
 
 /**
- * App proxy: GET https://{shop}/apps/sce/announcement-bar?id={barId}
- * Omit `id` to use the shop's most recently updated active bar (no paste in theme).
+ * App proxy: GET https://{shop}/apps/sce/announcement-bar?sectionId={sectionId}
+ * sectionId is required for rendering (strict ID-driven behavior).
  * Requires [app_proxy] in shopify.app.toml (subpath sce).
  */
 export const loader = async ({ request }) => {
   const { session } = await authenticate.public.appProxy(request);
   const url = new URL(request.url);
   const shop = (session?.shop || url.searchParams.get("shop") || "").trim();
-  const id = (url.searchParams.get("id") || "").trim();
+  const sectionId = (url.searchParams.get("sectionId") || "").trim();
 
   if (!shop) {
     return Response.json({ ok: false, error: "missing_shop" }, { status: 400 });
   }
 
-  await enforceSingleActiveAnnouncementBar(shop, id || null);
+  let bar = null;
 
-  if (id) {
-    const anyBar = await prisma.announcementBar.findFirst({
-      where: { shop, id },
-    });
-    if (anyBar && !anyBar.active) {
-      return Response.json(
-        { ok: false, error: "inactive", hint: "Turn the bar on in the app (Active checkbox)." },
-        { status: 404 },
-      );
-    }
+  if (!sectionId) {
+    return Response.json(
+      {
+        ok: false,
+        error: "missing_section_id",
+        hint: "Enter a Section ID in the theme block settings (format: sce-ab-...).",
+      },
+      { status: 400 },
+    );
   }
 
-  const bar = id
-    ? await prisma.announcementBar.findFirst({
-        where: { shop, id, active: true },
-      })
-    : await prisma.announcementBar.findFirst({
-        where: { shop, active: true },
-        orderBy: { updatedAt: "desc" },
-      });
+  const bars = await prisma.announcementBar.findMany({
+    where: { shop },
+    orderBy: { updatedAt: "desc" },
+  });
+  for (const candidate of bars) {
+    const cfg = parseConfig(candidate.configJson);
+    const candidateSectionId = String(cfg.sectionHtmlId || `sce-ab-${candidate.id}`).trim();
+    if (candidateSectionId === sectionId) {
+      bar = candidate;
+      break;
+    }
+  }
 
   if (!bar) {
     return Response.json(
       {
         ok: false,
         error: "not_found",
-        hint: id
-          ? "Check the Bar ID matches the app and the bar is active."
-          : "Create an active announcement bar in the app.",
+        hint: "Check the Section ID matches an announcement in the app.",
       },
       { status: 404 },
     );
   }
 
-  let config = {};
-  try {
-    config = JSON.parse(bar.configJson || "{}");
-    if (typeof config !== "object" || config === null) config = {};
-  } catch {
-    config = {};
-  }
+  const cfg = parseConfig(bar.configJson);
+  const storedSectionId = String(cfg.sectionHtmlId ?? "").trim();
+  const sectionHtmlId = storedSectionId || `sce-ab-${bar.id}`;
+  const config = { ...cfg };
+  delete config.sectionHtmlId;
 
   const liquidSrc = String(bar.customLiquid ?? "").trim();
   let customHtml = bar.customHtml ?? "";
@@ -76,6 +75,9 @@ export const loader = async ({ request }) => {
   return Response.json({
     ok: true,
     id: bar.id,
+    sectionHtmlId,
+    version: `${bar.id}:${bar.updatedAt?.toISOString?.() || ""}`,
+    updatedAt: bar.updatedAt?.toISOString?.() || null,
     barType: bar.barType,
     config,
     customHtml,

@@ -3,6 +3,11 @@ query CartInput {
     sequentialUnlockLevel: attribute(key: "sce_sequential_unlock") {
       value
     }
+    cost {
+      subtotalAmount {
+        amount
+      }
+    }
     lines {
       id
       cost {

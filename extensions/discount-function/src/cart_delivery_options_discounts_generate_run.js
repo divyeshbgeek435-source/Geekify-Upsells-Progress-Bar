@@ -69,9 +69,14 @@ export function cartDeliveryOptionsDiscountsGenerateRun(input) {
   }
 
   const subtotal = normalizeAmount(input?.cart?.cost?.subtotalAmount?.amount);
+  const threshold = config.thresholdTiers;
+  const tier1Qualified = subtotal >= Number(threshold?.tier1?.minSubtotal || 0);
+  const tier1FreeShipping =
+    threshold?.tier1?.type === "FREE_SHIPPING" && tier1Qualified;
+  const dynamicFreeShippingTier = resolveQualifiedFreeShippingTier(config.tiers, subtotal);
   const tierDecision = resolveShippingTier(subtotal, config.shipping);
 
-  if (tierDecision.shippingCharge > 0) {
+  if (!tier1FreeShipping && !dynamicFreeShippingTier && tierDecision.shippingCharge > 0) {
     // Shopify Functions can discount shipping, but cannot add a surcharge.
     return {operations: []};
   }
@@ -82,7 +87,11 @@ export function cartDeliveryOptionsDiscountsGenerateRun(input) {
         deliveryDiscountsAdd: {
           candidates: [
             {
-              message: tierDecision.message,
+              message: dynamicFreeShippingTier
+                ? String(dynamicFreeShippingTier?.message || "Free shipping unlocked")
+                : tier1FreeShipping
+                ? String(threshold?.tier1?.message || "Free shipping unlocked")
+                : tierDecision.message,
               targets: [
                 {
                   deliveryGroup: {
@@ -106,6 +115,20 @@ export function cartDeliveryOptionsDiscountsGenerateRun(input) {
 
 function parseFunctionConfig(raw) {
   const base = {
+    tiers: [],
+    thresholdTiers: {
+      tier1: {
+        type: "FREE_SHIPPING",
+        minSubtotal: 500,
+        discountPercentage: 5,
+        message: "You have free shipping!",
+      },
+      tier2: {
+        minSubtotal: 1000,
+        discountPercentage: 20,
+        message: "20% off unlocked",
+      },
+    },
     shipping: {
       message: "You have free shipping!",
       defaultCharge: 50,
@@ -117,12 +140,69 @@ function parseFunctionConfig(raw) {
   };
   if (!raw || typeof raw !== 'object') return base;
   return {
+    tiers: normalizeRuntimeTiers(raw?.tiers),
+    thresholdTiers: normalizeThresholdTiers(raw?.thresholdTiers, base.thresholdTiers),
     shipping: {
       message: String(raw?.shipping?.message || base.shipping.message),
       defaultCharge: normalizeAmount(raw?.shipping?.defaultCharge, base.shipping.defaultCharge),
       tiers: normalizeTiers(raw?.shipping?.tiers, base.shipping.tiers),
     },
   };
+}
+
+function normalizeRuntimeTiers(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((tier) => ({
+      minSubtotal: normalizeAmount(tier?.minSubtotal, 0),
+      rewardType:
+        String(tier?.rewardType || "").trim().toUpperCase() === "FREE_SHIPPING"
+          ? "FREE_SHIPPING"
+          : "PERCENTAGE",
+      discountPercentage: normalizeAmount(tier?.discountPercentage, 0),
+      message: String(tier?.message || ""),
+      active: tier?.active !== false,
+    }))
+    .filter((tier) => tier.active)
+    .sort((a, b) => a.minSubtotal - b.minSubtotal);
+}
+
+function resolveQualifiedFreeShippingTier(runtimeTiers, subtotal) {
+  if (!Array.isArray(runtimeTiers) || runtimeTiers.length === 0) return null;
+  let matchedTier = null;
+  for (const tier of runtimeTiers) {
+    if (subtotal < Number(tier.minSubtotal || 0)) continue;
+    const isFreeShipping =
+      String(tier.rewardType || "").trim().toUpperCase() === "FREE_SHIPPING";
+    if (isFreeShipping) matchedTier = tier;
+  }
+  return matchedTier;
+}
+
+function normalizeThresholdTiers(value, fallback) {
+  const src = value && typeof value === "object" ? value : {};
+  const tier1 = src.tier1 && typeof src.tier1 === "object" ? src.tier1 : {};
+  const tier2 = src.tier2 && typeof src.tier2 === "object" ? src.tier2 : {};
+  return {
+    tier1: {
+      type: normalizeTier1Type(tier1.type, fallback.tier1.type),
+      minSubtotal: normalizeAmount(tier1.minSubtotal, fallback.tier1.minSubtotal),
+      discountPercentage: normalizeAmount(tier1.discountPercentage, fallback.tier1.discountPercentage),
+      message: String(tier1.message || fallback.tier1.message),
+    },
+    tier2: {
+      minSubtotal: normalizeAmount(tier2.minSubtotal, fallback.tier2.minSubtotal),
+      discountPercentage: normalizeAmount(tier2.discountPercentage, fallback.tier2.discountPercentage),
+      message: String(tier2.message || fallback.tier2.message),
+    },
+  };
+}
+
+function normalizeTier1Type(value, fallback) {
+  const normalized = String(value || "").trim().toUpperCase();
+  if (normalized === "FREE_SHIPPING") return "FREE_SHIPPING";
+  if (normalized === "DISCOUNT") return "DISCOUNT";
+  return fallback;
 }
 
 function normalizeAmount(value, fallback = 0) {

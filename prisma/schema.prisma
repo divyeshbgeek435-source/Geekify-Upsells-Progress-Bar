@@ -62,3 +62,19 @@ model AnnouncementBar {
 
   @@index([shop])
 }
+
+model ThresholdTier {
+  id                String   @id @default(cuid())
+  shop              String
+  name              String
+  minSubtotal       Float
+  rewardType        String
+  discountPercent   Float?
+  message           String   @default("")
+  position          Int      @default(0)
+  active            Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([shop, active, position])
+}

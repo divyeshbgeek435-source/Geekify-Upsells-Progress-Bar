@@ -2,6 +2,7 @@
   "name": "cart",
   "private": true,
   "scripts": {
+    "postinstall": "prisma generate",
     "build": "prisma generate && react-router build",
     "dev": "shopify app dev",
     "config:link": "shopify app config link",

@@ -14,7 +14,7 @@
   data-sce-announcement=""
   data-sce-ab-hook="sce-ab-hook-{{ block.id }}"
   data-placement="{{ block.settings.placement | default: 'sticky' | escape }}"
-  data-bar-id="{{ block.settings.bar_id | escape }}"
+  data-section-id="{{ block.settings.section_id | escape }}"
   data-api-url="{{ shop.secure_url }}/apps/sce/announcement-bar"
   data-z-index="{{ block.settings.z_index }}"
   defer
@@ -23,36 +23,19 @@
 {% schema %}
 {
   "name": "Announcement bar",
-  "target": "section",
+  "target": "section", 
   "settings": [
     {
       "type": "paragraph",
-      "content": "Each announcement in the app has a unique ID. Paste that ID below to show that exact bar, or leave empty to use the shop’s single active announcement. Get the ID from the app: Announcement bars → Copy ID."
-    },
-    {
-      "type": "select",
-      "id": "placement",
-      "label": "Placement",
-      "default": "sticky",
-      "options": [
-        { "value": "sticky", "label": "Top of page (fixed above header)" },
-        { "value": "inline", "label": "Inline (only where this block is in the page)" }
-      ],
-      "info": "Previously the bar only appeared inside this block’s position. If your Apps section is below the image banner, “Inline” looks like nothing at the top — use “Top of page” instead."
+      "content": "ID-driven mode: paste a Section ID (sce-ab-...) to render that exact announcement. Nothing renders when empty."
     },
     {
       "type": "text",
-      "id": "bar_id",
-      "label": "Announcement ID from app",
-      "info": "The unique ID from Announcement bars (not the theme block or section ID). Empty = the active announcement for this shop."
+      "id": "section_id",
+      "label": "Section ID",
+      "info": "Use the generated Section HTML ID from Announcement bars (Copy Section ID)."
     },
-    {
-      "type": "number",
-      "id": "z_index",
-      "label": "Z-index",
-      "default": 1000000,
-      "info": "Use a large value (e.g. 1000000). Values like 10 sit under the sticky header so the bar looks missing."
-    }
+    
   ]
 }
 {% endschema %}

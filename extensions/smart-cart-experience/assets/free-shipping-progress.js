@@ -3,14 +3,13 @@
   if (!script) return;
 
   var thresholdValue = Number(script.dataset.threshold || 0);
-  var thresholdCents = Math.max(0, Math.round(thresholdValue * 100));
   var shippingChargeValue = Number(script.dataset.shippingCharge || 0);
-  var shippingChargeCents = Math.max(0, Math.round(shippingChargeValue * 100));
   var titleText = script.dataset.title || "Free shipping progress";
   var progressText = script.dataset.progressText || "Spend [remaining_amount] more for free shipping.";
   var reachedText = script.dataset.reachedText || "You have free shipping!";
   var chargedText = script.dataset.chargedText || "Shipping charge [shipping_amount] applied";
   var sequentialMode = String(script.dataset.sequentialMode || "").toLowerCase() === "true";
+  var dynamicTierMode = String(script.dataset.dynamicTierMode || "").toLowerCase() === "true";
   var unlockAttributeKey =
     (script.dataset.unlockAttributeKey || "sce_sequential_unlock").trim() || "sce_sequential_unlock";
   var sequentialTitle = script.dataset.sequentialTitle || titleText;
@@ -37,7 +36,60 @@
   var sequentialMsg2 =
     script.dataset.sequentialMsg2 ||
     "Free shipping unlocked";
-  var tiers = parseTiers(script.dataset.tiers, shippingChargeCents);
+  var storeMoneyFormat = script.dataset.moneyFormat || "";
+
+  /** ISO 4217 currencies with zero minor units (Shopify cart amounts are in those units, not ×100). */
+  var ZERO_DECIMAL_CURRENCIES = {
+    BIF: true,
+    CLP: true,
+    DJF: true,
+    GNF: true,
+    JPY: true,
+    KMF: true,
+    KRW: true,
+    MGA: true,
+    PYG: true,
+    RWF: true,
+    UGX: true,
+    VND: true,
+    VUV: true,
+    XAF: true,
+    XOF: true,
+    XPF: true,
+  };
+
+  function getShopCurrencyExponent(cart) {
+    var cur =
+      (cart && cart.currency) ||
+      (window.Shopify && window.Shopify.currency && window.Shopify.currency.active) ||
+      "";
+    cur = String(cur).toUpperCase().trim();
+    if (!cur) return 2;
+    if (ZERO_DECIMAL_CURRENCIES[cur]) return 0;
+    return 2;
+  }
+
+  /** Convert admin/theme amounts (major units) to the same minor units Shopify uses in /cart.js. */
+  function majorUnitsToCartMinor(amountMajor, exp) {
+    var n = Number(amountMajor);
+    if (!Number.isFinite(n) || n < 0) return 0;
+    return Math.round(n * Math.pow(10, exp));
+  }
+
+  function toMinorInt(value) {
+    if (value == null || value === "") return null;
+    if (typeof value === "number" && Number.isFinite(value)) return Math.round(value);
+    if (typeof value === "string" && String(value).trim() !== "") {
+      var parsed = Number(String(value).trim());
+      if (Number.isFinite(parsed)) return Math.round(parsed);
+    }
+    return null;
+  }
+
+  var currencyExponentAtBoot = getShopCurrencyExponent(null);
+  var thresholdCents = Math.max(0, majorUnitsToCartMinor(thresholdValue, currencyExponentAtBoot));
+  var shippingChargeCents = Math.max(0, majorUnitsToCartMinor(shippingChargeValue, currencyExponentAtBoot));
+  var tiers = parseTiers(script.dataset.tiers, shippingChargeCents, currencyExponentAtBoot);
   var cartNameText = script.dataset.cartName || "";
   var defaultNameTargets = [
     ".drawer__header",
@@ -73,6 +125,11 @@
   var logUrl = (script.dataset.logUrl || "").trim();
   var logEnabled = String(script.dataset.logEnabled || "").toLowerCase() === "true";
 
+  if (dynamicTierMode) {
+    // Dynamic tiers use a 2-step milestone UI without manual unlock buttons.
+    sequentialMode = true;
+  }
+
   var updateTimeout;
   var isApplyingChanges = false;
   var lastUpdateAt = 0;
@@ -88,6 +145,86 @@
     return unique;
   }
 
+  function safeFetchJson(url) {
+    return fetch(url, { credentials: "same-origin" })
+      .then(function (r) {
+        if (!r.ok) throw new Error("Request failed");
+        return r.json();
+      })
+      .catch(function () {
+        return null;
+      });
+  }
+
+  function mapPrismaTiersToLegacyShippingTiers(prismaTiers) {
+    if (!Array.isArray(prismaTiers)) return null;
+    return prismaTiers
+      .filter(function (t) {
+        return t && t.active !== false;
+      })
+      .map(function (t) {
+        var min = Number(t.minSubtotal || 0);
+        var isFreeShip = String(t.rewardType || "").toUpperCase() === "FREE_SHIPPING";
+        return {
+          min: Number.isFinite(min) ? min : 0,
+          max: null,
+          shipping: isFreeShip ? 0 : shippingChargeValue,
+          message: t.message ? String(t.message) : "",
+        };
+      })
+      .sort(function (a, b) {
+        return a.min - b.min;
+      });
+  }
+
+  function applyDynamicTierLabels(prismaTiers) {
+    if (!Array.isArray(prismaTiers) || prismaTiers.length === 0) return;
+    var active = prismaTiers.filter(function (t) { return t && t.active !== false; });
+    active.sort(function (a, b) { return Number(a.minSubtotal || 0) - Number(b.minSubtotal || 0); });
+    var t1 = active[0];
+    var t2 = active.length > 1 ? active[1] : null;
+    if (t1) {
+      var r1 = String(t1.rewardType || "").toUpperCase();
+      tier1Label = r1 === "FREE_SHIPPING" ? "Free shipping" : "Discount";
+      tier1TagText =
+        r1 === "FREE_SHIPPING"
+          ? "Free shipping"
+          : (Number(t1.discountPercent || 0) > 0 ? String(Number(t1.discountPercent || 0).toFixed(0)) + "% OFF" : "Discount");
+    }
+    if (t2) {
+      var r2 = String(t2.rewardType || "").toUpperCase();
+      tier2Label = r2 === "FREE_SHIPPING" ? "Free shipping" : "Discount";
+      tier2TagText =
+        r2 === "FREE_SHIPPING"
+          ? "Free shipping"
+          : (Number(t2.discountPercent || 0) > 0 ? String(Number(t2.discountPercent || 0).toFixed(0)) + "% OFF" : "Discount");
+    }
+  }
+
+  function refreshDynamicTiersWithCart(cart) {
+    if (!dynamicTierMode || !logUrl) return Promise.resolve(false);
+    var subtotalCents = getCartSubtotalCents(cart);
+    var url = logUrl;
+    if (url.indexOf("?") === -1) url += "?";
+    else url += "&";
+    url += "subtotalCents=" + encodeURIComponent(String(subtotalCents || 0));
+    var cur = cart && cart.currency ? String(cart.currency).trim() : "";
+    if (cur) url += "&currency=" + encodeURIComponent(cur);
+    return safeFetchJson(url).then(function (data) {
+      if (!data || !data.ok) return false;
+      var mapped = mapPrismaTiersToLegacyShippingTiers(data.tiers);
+      if (!mapped || mapped.length === 0) return false;
+      var exp = getShopCurrencyExponent(cart);
+      tiers = parseTiers(JSON.stringify(mapped), shippingChargeCents, exp);
+      applyDynamicTierLabels(data.tiers);
+      // Use tier messages for the sequential widget.
+      if (data.appliedTier && data.appliedTier.message) {
+        sequentialMsg2 = String(data.appliedTier.message);
+      }
+      return true;
+    });
+  }
+
   /** If both .drawer and .drawer__inner match, keep only the inner node so we render one bar / one name row. */
   function keepDeepestHosts(hosts) {
     return hosts.filter(function (h) {
@@ -97,16 +234,53 @@
     });
   }
 
-  function formatMoney(cents, shopifyMoneyFormat) {
-    var money = cents / 100;
-    try {
-      return Shopify.formatMoney(cents, shopifyMoneyFormat || window.Shopify?.money_format);
-    } catch (e) {
-      return "$" + money.toFixed(2);
+  function formatAmountByToken(cents, token) {
+    var precision = token.indexOf("no_decimals") !== -1 ? 0 : 2;
+    var thousands = token.indexOf("comma_separator") !== -1 ? "." : ",";
+    var decimal = token.indexOf("comma_separator") !== -1 ? "," : ".";
+    var value = cents / 100;
+    if (token.indexOf("no_decimals") !== -1) {
+      value = Math.round(value);
     }
+    var fixed = value.toFixed(precision);
+    var parts = fixed.split(".");
+    var whole = parts[0];
+    var fraction = parts.length > 1 ? parts[1] : "";
+    whole = whole.replace(/\B(?=(\d{3})+(?!\d))/g, thousands);
+    if (!precision) return whole;
+    return whole + decimal + fraction;
   }
 
-  function parseTiers(raw, defaultShippingCents) {
+  function formatUsingMoneyFormat(cents, moneyFormat) {
+    if (!moneyFormat) return null;
+    var tokenMatch = moneyFormat.match(/\{\{\s*(\w+)\s*\}\}/);
+    if (!tokenMatch) return null;
+    var token = tokenMatch[1];
+    var amount = formatAmountByToken(cents, token);
+    return moneyFormat.replace(tokenMatch[0], amount);
+  }
+
+  function formatMoney(cents, shopifyMoneyFormat) {
+    var activeFormat = shopifyMoneyFormat || storeMoneyFormat || window.Shopify?.money_format || "";
+    if (window.Shopify && typeof window.Shopify.formatMoney === "function") {
+      try {
+        return window.Shopify.formatMoney(cents, activeFormat || window.Shopify.money_format);
+      } catch (e) {
+        /* fallback below */
+      }
+    }
+
+    var formatted = formatUsingMoneyFormat(cents, activeFormat);
+    if (formatted) return formatted;
+
+    return new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: (window.Shopify && window.Shopify.currency && window.Shopify.currency.active) || "USD",
+    }).format(cents / 100);
+  }
+
+  function parseTiers(raw, defaultShippingCents, currencyExp) {
+    var exp = typeof currencyExp === "number" && Number.isFinite(currencyExp) ? currencyExp : 2;
     var fallback = [
       { minCents: thresholdCents, maxCents: null, shippingCents: 0, message: reachedText }
     ];
@@ -121,10 +295,10 @@
           var shipping = Number(tier && tier.shipping);
           var message = tier && tier.message ? String(tier.message) : "";
           return {
-            minCents: Number.isFinite(min) ? Math.max(0, Math.round(min * 100)) : 0,
-            maxCents: Number.isFinite(max) ? Math.max(0, Math.round(max * 100)) : null,
+            minCents: Number.isFinite(min) ? Math.max(0, majorUnitsToCartMinor(min, exp)) : 0,
+            maxCents: Number.isFinite(max) ? Math.max(0, majorUnitsToCartMinor(max, exp)) : null,
             shippingCents: Number.isFinite(shipping)
-              ? Math.max(0, Math.round(shipping * 100))
+              ? Math.max(0, majorUnitsToCartMinor(shipping, exp))
               : defaultShippingCents,
             message: message,
           };
@@ -148,6 +322,52 @@
     return thresholdCents;
   }
 
+  /** How many milestone columns to show: 1 or 2 (sequential UI supports at most two). */
+  function getDisplayedSequentialTierCount() {
+    if (!tiers || tiers.length === 0) return 1;
+    if (dynamicTierMode) {
+      return Math.min(2, Math.max(1, tiers.length));
+    }
+    var mins = tiers
+      .map(function (tier) {
+        return Number(tier && tier.minCents);
+      })
+      .filter(function (v) {
+        return Number.isFinite(v) && v >= 0;
+      })
+      .sort(function (a, b) {
+        return a - b;
+      });
+    var unique = [];
+    for (var i = 0; i < mins.length; i += 1) {
+      if (!unique.length || unique[unique.length - 1] !== mins[i]) unique.push(mins[i]);
+    }
+    if (unique.length <= 1) return 1;
+    return 2;
+  }
+
+  function setStepSubText(subEl, labelText, subText) {
+    if (!subEl) return;
+    var st = (subText || "").trim();
+    var lt = (labelText || "").trim();
+    if (!st || st.toLowerCase() === lt.toLowerCase()) {
+      subEl.textContent = "";
+    } else {
+      subEl.textContent = subText;
+    }
+  }
+
+  function setStepMinAmount(el, minCents) {
+    if (!el) return;
+    if (!Number.isFinite(minCents) || minCents <= 0) {
+      el.textContent = "";
+      el.setAttribute("aria-hidden", "true");
+      return;
+    }
+    el.removeAttribute("aria-hidden");
+    el.textContent = "Min. " + formatMoney(minCents);
+  }
+
   /** Dynamic tier targets for UI progress: Tier 1 (discount), Tier 2 (free shipping). */
   function getSequentialTargetsCents() {
     var mins = tiers
@@ -155,7 +375,7 @@
         return Number(tier && tier.minCents);
       })
       .filter(function (v) {
-        return Number.isFinite(v) && v > 0;
+        return Number.isFinite(v) && v >= 0;
       })
       .sort(function (a, b) {
         return a - b;
@@ -163,7 +383,7 @@
 
     var tier1 = mins.length ? mins[0] : thresholdCents;
     var tier2 = mins.length > 1 ? mins[1] : firstFreeTierMinCents();
-    if (!Number.isFinite(tier2) || tier2 <= 0) tier2 = tier1 > 0 ? tier1 : 1;
+    if (!Number.isFinite(tier2) || tier2 < 0) tier2 = tier1 >= 0 ? tier1 : 0;
     if (tier2 < tier1) tier2 = tier1;
     return { tier1Cents: tier1, tier2Cents: tier2 };
   }
@@ -178,8 +398,26 @@
   }
 
   function getCartSubtotalCents(cart) {
-    if (typeof cart?.items_subtotal_price === "number") return cart.items_subtotal_price;
-    if (typeof cart?.total_price === "number") return cart.total_price;
+    if (!cart) return 0;
+    var cents = toMinorInt(cart.items_subtotal_price);
+    if (cents != null) return cents;
+    cents = toMinorInt(cart.original_total_price);
+    if (cents != null) return cents;
+    cents = toMinorInt(cart.total_price);
+    if (cents != null) return cents;
+    if (Array.isArray(cart.items) && cart.items.length) {
+      var sum = 0;
+      var any = false;
+      for (var i = 0; i < cart.items.length; i += 1) {
+        var li = cart.items[i];
+        var line = toMinorInt(li && (li.final_line_price != null ? li.final_line_price : li.line_price));
+        if (line != null) {
+          sum += line;
+          any = true;
+        }
+      }
+      if (any) return sum;
+    }
     return 0;
   }
 
@@ -244,26 +482,45 @@
     '<div class="sce-seq-step__icon-wrap"><span class="sce-seq-step__dot"></span><span class="sce-seq-step__icon" aria-hidden="true">%</span></div>' +
     '<div class="sce-seq-step__label"></div>' +
     '<div class="sce-seq-step__sub"></div>' +
+    '<div class="sce-seq-step__min"></div>' +
+    "</div>" +
+    '<div class="sce-seq-connector" aria-hidden="true">' +
+    '<div class="sce-seq-connector__track"><span class="sce-seq-connector__fill"></span></div>' +
     "</div>" +
     '<div class="sce-seq-step" data-tier-step="2">' +
     '<div class="sce-seq-step__icon-wrap"><span class="sce-seq-step__dot"></span><span class="sce-seq-step__icon" aria-hidden="true">🚚</span></div>' +
     '<div class="sce-seq-step__label"></div>' +
     '<div class="sce-seq-step__sub"></div>' +
+    '<div class="sce-seq-step__min"></div>' +
     "</div>" +
     "</div>" +
     '<div class="sce-free-shipping-widget__hint sce-seq-hint"></div>';
 
   function renderSequentialWidget(host, cart) {
     if (!host) return;
-    bindSequentialUnlockClicks();
+    if (!dynamicTierMode) {
+      bindSequentialUnlockClicks();
+    }
 
     var level = getSequentialLevelFromCart(cart);
     var subtotalCents = getCartSubtotalCents(cart);
     var targets = getSequentialTargetsCents();
-    var tier1Complete = level >= 1 || subtotalCents >= targets.tier1Cents;
-    var tier2Eligible = tier1Complete;
-    var tier2Complete = tier2Eligible && (level >= 2 || subtotalCents >= targets.tier2Cents);
-    var progressPct = tier2Complete ? 100 : tier1Complete ? 50 : 0;
+    var tierCount = getDisplayedSequentialTierCount();
+    var tier1Complete;
+    var tier2Eligible;
+    var tier2Complete;
+    var progressPct;
+    if (tierCount === 1) {
+      tier1Complete = level >= 1 || subtotalCents >= targets.tier1Cents;
+      tier2Eligible = false;
+      tier2Complete = false;
+      progressPct = tier1Complete ? 100 : 0;
+    } else {
+      tier1Complete = level >= 1 || subtotalCents >= targets.tier1Cents;
+      tier2Eligible = tier1Complete;
+      tier2Complete = tier2Eligible && (level >= 2 || subtotalCents >= targets.tier2Cents);
+      progressPct = tier2Complete ? 100 : tier1Complete ? 50 : 0;
+    }
 
     var root = host.classList.contains("sce-free-shipping-widget")
       ? host
@@ -287,16 +544,51 @@
     var mainBar = root.querySelector(".sce-seq-main-bar");
     var tierStep1 = root.querySelector('[data-tier-step="1"]');
     var tierStep2 = root.querySelector('[data-tier-step="2"]');
+    var stepsEl = root.querySelector(".sce-seq-steps");
     var step1Label = tierStep1 ? tierStep1.querySelector(".sce-seq-step__label") : null;
     var step2Label = tierStep2 ? tierStep2.querySelector(".sce-seq-step__label") : null;
     var step1Sub = tierStep1 ? tierStep1.querySelector(".sce-seq-step__sub") : null;
     var step2Sub = tierStep2 ? tierStep2.querySelector(".sce-seq-step__sub") : null;
+    var step1Icon = tierStep1 ? tierStep1.querySelector(".sce-seq-step__icon") : null;
+    var step1Min = tierStep1 ? tierStep1.querySelector(".sce-seq-step__min") : null;
+    var step2Min = tierStep2 ? tierStep2.querySelector(".sce-seq-step__min") : null;
+    if (tierStep1 && !step1Min) {
+      step1Min = document.createElement("div");
+      step1Min.className = "sce-seq-step__min";
+      tierStep1.appendChild(step1Min);
+    }
+    if (tierStep2 && !step2Min) {
+      step2Min = document.createElement("div");
+      step2Min.className = "sce-seq-step__min";
+      tierStep2.appendChild(step2Min);
+    }
+    var connFill = root.querySelector(".sce-seq-connector__fill");
+    if (stepsEl && tierCount > 1 && tierStep1 && tierStep2 && !root.querySelector(".sce-seq-connector")) {
+      var conn = document.createElement("div");
+      conn.className = "sce-seq-connector";
+      conn.setAttribute("aria-hidden", "true");
+      conn.innerHTML =
+        '<div class="sce-seq-connector__track"><span class="sce-seq-connector__fill"></span></div>';
+      tierStep2.parentNode.insertBefore(conn, tierStep2);
+      connFill = conn.querySelector(".sce-seq-connector__fill");
+    }
     var hint = root.querySelector(".sce-seq-hint");
+
+    root.classList.toggle("sce-free-shipping-widget--sequential-single", tierCount === 1);
+    if (stepsEl) stepsEl.classList.toggle("sce-seq-steps--single", tierCount === 1);
+    if (tierStep2) {
+      var hideSecond = tierCount === 1;
+      tierStep2.style.display = hideSecond ? "none" : "";
+      tierStep2.setAttribute("aria-hidden", hideSecond ? "true" : "false");
+    }
 
     if (titleEl) titleEl.textContent = sequentialTitle;
 
     if (messageEl) {
-      if (tier2Complete) messageEl.textContent = sequentialMsg2;
+      if (tierCount === 1) {
+        if (tier1Complete) messageEl.textContent = sequentialMsg2;
+        else messageEl.textContent = sequentialMsg0;
+      } else if (tier2Complete) messageEl.textContent = sequentialMsg2;
       else if (tier1Complete) messageEl.textContent = sequentialMsg1;
       else messageEl.textContent = sequentialMsg0;
     }
@@ -307,11 +599,27 @@
       barFill.classList.toggle("is-active", progressPct > 0);
     }
     if (mainBar) mainBar.setAttribute("aria-valuenow", String(progressPct));
+    root.setAttribute("data-seq-progress", String(progressPct));
+    if (connFill) {
+      connFill.style.width = tierCount > 1 ? String(progressPct) + "%" : "0%";
+    }
 
     if (step1Label) step1Label.textContent = tier1Label;
     if (step2Label) step2Label.textContent = tier2Label;
-    if (step1Sub) step1Sub.textContent = tier1TagText;
-    if (step2Sub) step2Sub.textContent = tier2TagText;
+    setStepSubText(step1Sub, tier1Label, tier1TagText);
+    setStepSubText(step2Sub, tier2Label, tier2TagText);
+    setStepMinAmount(step1Min, targets.tier1Cents);
+    setStepMinAmount(step2Min, tierCount > 1 ? targets.tier2Cents : NaN);
+
+    if (step1Icon) {
+      if (tierCount === 1) {
+        var singleShip =
+          /free\s*shipping|shipping/i.test(String(tier1Label || "") + String(tier1TagText || ""));
+        step1Icon.textContent = singleShip ? "🚚" : "%";
+      } else {
+        step1Icon.textContent = "%";
+      }
+    }
 
     if (tierStep1) {
       tierStep1.classList.toggle("is-complete", tier1Complete);
@@ -326,7 +634,19 @@
     if (hint) {
       var subLabel = formatMoney(subtotalCents);
       var shipLabel = formatMoney(shippingChargeCents);
-      if (tier2Complete) {
+      if (tierCount === 1) {
+        if (tier1Complete) {
+          hint.textContent = "Current subtotal: " + subLabel + " · " + sequentialMsg2;
+        } else {
+          hint.textContent =
+            "Current subtotal: " +
+            subLabel +
+            " (Estimated shipping: " +
+            shipLabel +
+            ") · " +
+            sequentialHintZero;
+        }
+      } else if (tier2Complete) {
         hint.textContent =
           "Current subtotal: " + subLabel + " · " + sequentialMsg2;
       } else if (tier1Complete) {
@@ -345,6 +665,14 @@
           shipLabel +
           ") · " +
           sequentialHintZero;
+      }
+    }
+
+    if (dynamicTierMode) {
+      // Hide interactive unlock buttons; this mode is automatic ("highest tier wins").
+      var buttons = root.querySelectorAll(".sce-tier-unlock-btn");
+      for (var i = 0; i < buttons.length; i += 1) {
+        buttons[i].style.display = "none";
       }
     }
   }
@@ -511,12 +839,7 @@
   function postCartAccessLog(cart) {
     if (!logEnabled || !logUrl || !cart) return;
 
-    var subtotal =
-      typeof cart.items_subtotal_price === "number"
-        ? cart.items_subtotal_price
-        : typeof cart.total_price === "number"
-          ? cart.total_price
-          : 0;
+    var subtotal = getCartSubtotalCents(cart);
     var sig = String(cart.item_count || 0) + "_" + String(subtotal);
     if (sig === lastPostedCartSig) return;
     lastPostedCartSig = sig;
@@ -622,7 +945,8 @@
     fetchCart()
       .then(function (cart) {
         if (needLog) postCartAccessLog(cart);
-        if (needWidget) {
+        var runRender = function () {
+          if (!needWidget) return;
           keepDeepestHosts(getHosts()).forEach(function (host) {
             if (sequentialMode) {
               renderSequentialWidget(host, cart);
@@ -630,6 +954,12 @@
               renderWidget(host, cart);
             }
           });
+        };
+
+        if (dynamicTierMode) {
+          refreshDynamicTiersWithCart(cart).then(runRender);
+        } else {
+          runRender();
         }
       })
       .catch(function () {

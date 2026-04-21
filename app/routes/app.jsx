@@ -6,6 +6,8 @@ import { authenticate } from "../shopify.server";
 
 const APP_EMBED_BLOCK_HANDLE = "free-shipping-progress-embed";
 const CART_PAGE_BLOCK_HANDLE = "free-shipping-progress-block";
+const ADDITIONAL_UI_BLOCK_HANDLE = "additional-ui-block";
+const POPUP_DESIGN_BLOCK_HANDLE = "popup-design-block";
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
@@ -25,6 +27,14 @@ export const loader = async ({ request }) => {
     addAppBlockId: `${clientId}/${CART_PAGE_BLOCK_HANDLE}`,
     target: "newAppsSection",
   });
+  const additionalUiBlockQuery = new URLSearchParams({
+    addAppBlockId: `${clientId}/${ADDITIONAL_UI_BLOCK_HANDLE}`,
+    target: "newAppsSection",
+  });
+  const popupDesignBlockQuery = new URLSearchParams({
+    addAppBlockId: `${clientId}/${POPUP_DESIGN_BLOCK_HANDLE}`,
+    target: "newAppsSection",
+  });
 
   const editorBase = `https://admin.shopify.com/store/${storeHandle}/themes/current/editor`;
 
@@ -34,10 +44,16 @@ export const loader = async ({ request }) => {
     clientIdConfigured: Boolean(clientId),
     appEmbedEditorUrl: `${editorBase}?${appEmbedQuery.toString()}`,
     cartBlockEditorUrl: `${editorBase}?${cartBlockQuery.toString()}`,
+    additionalUiBlockEditorUrl: `${editorBase}?${additionalUiBlockQuery.toString()}`,
+    popupDesignBlockEditorUrl: `${editorBase}?${popupDesignBlockQuery.toString()}`,
     legacyAppEmbedUrl: `https://${shop}/admin/themes/current/editor?${appEmbedQuery.toString()}`,
     legacyCartBlockUrl: `https://${shop}/admin/themes/current/editor?${cartBlockQuery.toString()}`,
+    legacyAdditionalUiBlockUrl: `https://${shop}/admin/themes/current/editor?${additionalUiBlockQuery.toString()}`,
+    legacyPopupDesignBlockUrl: `https://${shop}/admin/themes/current/editor?${popupDesignBlockQuery.toString()}`,
     appEmbedHandle: APP_EMBED_BLOCK_HANDLE,
     cartBlockHandle: CART_PAGE_BLOCK_HANDLE,
+    additionalUiBlockHandle: ADDITIONAL_UI_BLOCK_HANDLE,
+    popupDesignBlockHandle: POPUP_DESIGN_BLOCK_HANDLE,
   };
 
   return { apiKey: apiKeyForBridge, onboarding };
@@ -64,8 +80,9 @@ export default function App() {
       <s-app-nav>
         <s-link href={withShopifyParams("/app")}>Home</s-link>
         <s-link href={withShopifyParams("/app/discounts")}>Discounts</s-link>
-        <s-link href={withShopifyParams("/app/additional")}>Additional page</s-link>
+        <s-link href={withShopifyParams("/app/additional")}>Announcement UI lab</s-link>
         <s-link href={withShopifyParams("/app/announcement-bars")}>Announcement bars</s-link>
+        <s-link href={withShopifyParams("/app/popup-design")}>Popup design</s-link>
       </s-app-nav>
       <Outlet context={{ onboarding }} />
     </AppProvider>

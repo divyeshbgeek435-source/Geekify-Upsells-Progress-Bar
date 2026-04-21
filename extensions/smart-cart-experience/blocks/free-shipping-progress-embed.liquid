@@ -17,6 +17,7 @@
   data-name-targets="{{ block.settings.name_selector_targets | escape }}"
   data-targets="{{ selector_targets | escape }}"
   data-log-url="{{ shop.secure_url }}/apps/sce/cart-access"
+  data-dynamic-tier-mode="true"
   data-log-enabled="{% if block.settings.enable_cart_access_log %}true{% else %}false{% endif %}"
   data-sequential-mode="{% if block.settings.sequential_unlock_mode %}true{% else %}false{% endif %}"
   data-unlock-attribute-key="{{ block.settings.unlock_attribute_key | escape }}"
@@ -36,6 +37,7 @@
   data-sequential-msg0="{{ block.settings.sequential_msg_0 | escape }}"
   data-sequential-msg1="{{ block.settings.sequential_msg_1 | escape }}"
   data-sequential-msg2="{{ block.settings.sequential_msg_2 | escape }}"
+  data-money-format="{{ shop.money_format | escape }}"
   defer
 ></script>
 
@@ -86,7 +88,7 @@
       "type": "textarea",
       "id": "shipping_tiers_json",
       "label": "Shipping tiers (JSON)",
-      "default": "[{\"min\":500,\"max\":999.99,\"shipping\":0,\"message\":\"You have free shipping!\"},{\"min\":1000,\"max\":null,\"shipping\":50,\"message\":\"Shipping charge Rs 50 applied\"}]",
+      "default": "[{\"min\":500,\"max\":999.99,\"shipping\":0,\"message\":\"You have free shipping!\"},{\"min\":1000,\"max\":null,\"shipping\":50,\"message\":\"Shipping charge [shipping_amount] applied\"}]",
       "info": "Supports future tiers. Format: [{\"min\":500,\"max\":999.99,\"shipping\":0},{\"min\":1000,\"max\":null,\"shipping\":50}]"
     },
     {

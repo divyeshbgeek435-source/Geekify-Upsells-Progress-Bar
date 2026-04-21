@@ -212,6 +212,24 @@ export default function Index() {
               >
                 Open cart template — add block (optional)
               </a>
+              <a
+                href={onboarding.popupDesignBlockEditorUrl}
+                target="_top"
+                rel="noopener noreferrer"
+                style={{
+                  display: "inline-block",
+                  padding: "8px 16px",
+                  background: "transparent",
+                  color: "#202223",
+                  border: "1px solid #c9cccf",
+                  borderRadius: "8px",
+                  textDecoration: "none",
+                  fontWeight: 600,
+                  fontSize: "14px",
+                }}
+              >
+                Open theme editor — add popup block
+              </a>
             </s-stack>
             <s-paragraph>
               <s-text tone="subdued">Primary URLs use admin.shopify.com.</s-text> If a
@@ -224,11 +242,15 @@ export default function Index() {
               <s-link href={onboarding.legacyCartBlockUrl} target="_top">
                 Legacy: cart template block
               </s-link>
+              <s-link href={onboarding.legacyPopupDesignBlockUrl} target="_top">
+                Legacy: popup design block
+              </s-link>
             </s-stack>
             <s-paragraph>
               <s-text tone="subdued">
                 Shop: {onboarding.shop}. Handles: <code>{onboarding.appEmbedHandle}</code>{" "}
-                (embed), <code>{onboarding.cartBlockHandle}</code> (cart block).
+                (embed), <code>{onboarding.cartBlockHandle}</code> (cart block),{" "}
+                <code>{onboarding.popupDesignBlockHandle}</code> (popup).
               </s-text>
             </s-paragraph>
           </s-stack>

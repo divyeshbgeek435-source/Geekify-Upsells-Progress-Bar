@@ -4244,6 +4244,7 @@ import {
 } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
+import prisma from "../db.server";
 
 // ─── GraphQL ────────────────────────────────────────────────────────────────
 
@@ -4392,9 +4393,16 @@ function parseFunctionConfigMetafield(metafield) {
 
 function customFieldsFromFunctionConfig(cfg) {
   if (!cfg || typeof cfg !== "object") return null;
+  const tiers =
+    cfg.thresholdTiers && typeof cfg.thresholdTiers === "object"
+      ? cfg.thresholdTiers
+      : null;
+  const tier1 = tiers?.tier1 && typeof tiers.tier1 === "object" ? tiers.tier1 : {};
+  const tier2 = tiers?.tier2 && typeof tiers.tier2 === "object" ? tiers.tier2 : {};
   const o = cfg.order && typeof cfg.order === "object" ? cfg.order : {};
   const p = cfg.product && typeof cfg.product === "object" ? cfg.product : {};
   const s = cfg.shipping && typeof cfg.shipping === "object" ? cfg.shipping : {};
+  const widgetUi = cfg.widgetUi && typeof cfg.widgetUi === "object" ? cfg.widgetUi : {};
   const numToStr = (v) => {
     if (v == null || v === "") return "";
     const n = Number(v);
@@ -4411,6 +4419,13 @@ function customFieldsFromFunctionConfig(cfg) {
         ? String(p.amountOff)
         : "";
   return {
+    tier1Type: String(tier1.type || "FREE_SHIPPING").toUpperCase() === "DISCOUNT" ? "DISCOUNT" : "FREE_SHIPPING",
+    tier1MinSubtotal: numToStr(tier1.minSubtotal || 500),
+    tier1DiscountPercentage: numToStr(tier1.discountPercentage || 10),
+    tier1Message: String(tier1.message || "Tier 1 unlocked"),
+    tier2MinSubtotal: numToStr(tier2.minSubtotal || 1000),
+    tier2DiscountPercentage: numToStr(tier2.discountPercentage || 20),
+    tier2Message: String(tier2.message || "Tier 2 unlocked"),
     discountValueType: valueType,
     amountOff: amountStr,
     percentage: numToStr(o.percentage),
@@ -4422,15 +4437,58 @@ function customFieldsFromFunctionConfig(cfg) {
     shippingMessage: String(s.message || ""),
     orderSelectionStrategy: String(o.selectionStrategy || "FIRST").toUpperCase(),
     productSelectionStrategy: String(p.selectionStrategy || "FIRST").toUpperCase(),
+    uiWidgetTitle: String(widgetUi.title || "Rewards progress"),
+    uiWidgetSubtitle: String(
+      widgetUi.subtitle ||
+        "Unlock Tier 1 to apply your cart discount. Then unlock Tier 2 for free shipping.",
+    ),
+    uiTier1Label: String(widgetUi.tier1Label || "Discount"),
+    uiTier2Label: String(widgetUi.tier2Label || "Free shipping"),
+    uiTier1Icon: String(widgetUi.tier1Icon || "%"),
+    uiTier2Icon: String(widgetUi.tier2Icon || "🚚"),
+    uiPrimaryColor: String(widgetUi.primaryColor || "#166534"),
+    uiTrackColor: String(widgetUi.trackColor || "#cbd5e1"),
+    uiTextColor: String(widgetUi.textColor || "#0f172a"),
+    uiMutedTextColor: String(widgetUi.mutedTextColor || "#64748b"),
+    uiCardBackground: String(widgetUi.cardBackground || "#ffffff"),
+    uiBorderColor: String(widgetUi.borderColor || "#d1d5db"),
+    uiIconBackground: String(widgetUi.iconBackground || "#166534"),
+    uiIconTextColor: String(widgetUi.iconTextColor || "#ffffff"),
+    uiShowProgressBar:
+      String(widgetUi.showProgressBar || "true").toLowerCase() === "false"
+        ? "false"
+        : "true",
   };
 }
 
 function makeFunctionConfig({
   existingConfig,
+  tier1Type,
+  tier1MinSubtotal,
+  tier1DiscountPercentage,
+  tier1Message,
+  tier2MinSubtotal,
+  tier2DiscountPercentage,
+  tier2Message,
   discountValueType, amountOff,
   orderPercentage, productPercentage, shippingPercentage,
   orderMessage, productMessage, shippingMessage,
   orderSelectionStrategy, productSelectionStrategy,
+  uiWidgetTitle,
+  uiWidgetSubtitle,
+  uiTier1Label,
+  uiTier2Label,
+  uiTier1Icon,
+  uiTier2Icon,
+  uiPrimaryColor,
+  uiTrackColor,
+  uiTextColor,
+  uiMutedTextColor,
+  uiCardBackground,
+  uiBorderColor,
+  uiIconBackground,
+  uiIconTextColor,
+  uiShowProgressBar,
 }) {
   const normalizedType = discountValueType === "FIXED_AMOUNT" ? "FIXED_AMOUNT" : "PERCENTAGE";
   const normalizedAmountOff = Number.isFinite(Number(amountOff)) ? Math.max(0, Number(amountOff)) : 0;
@@ -4444,6 +4502,23 @@ function makeFunctionConfig({
       : {};
   return JSON.stringify({
     ...prev,
+    thresholdTiers: {
+      tier1: {
+        type: String(tier1Type || "FREE_SHIPPING").toUpperCase() === "DISCOUNT" ? "DISCOUNT" : "FREE_SHIPPING",
+        minSubtotal: Number.isFinite(Number(tier1MinSubtotal)) ? Math.max(0, Number(tier1MinSubtotal)) : 500,
+        discountPercentage: Number.isFinite(Number(tier1DiscountPercentage))
+          ? Math.max(0, Math.min(100, Number(tier1DiscountPercentage)))
+          : 10,
+        message: String(tier1Message || "Tier 1 unlocked"),
+      },
+      tier2: {
+        minSubtotal: Number.isFinite(Number(tier2MinSubtotal)) ? Math.max(0, Number(tier2MinSubtotal)) : 1000,
+        discountPercentage: Number.isFinite(Number(tier2DiscountPercentage))
+          ? Math.max(0, Math.min(100, Number(tier2DiscountPercentage)))
+          : 20,
+        message: String(tier2Message || "Tier 2 unlocked"),
+      },
+    },
     order: {
       valueType: normalizedType,
       amountOff: normalizedAmountOff,
@@ -4462,6 +4537,29 @@ function makeFunctionConfig({
       ...shippingBase,
       percentage: shippingPercentage,
       message: shippingMessage,
+    },
+    widgetUi: {
+      title: String(uiWidgetTitle || "Rewards progress"),
+      subtitle: String(
+        uiWidgetSubtitle ||
+          "Unlock Tier 1 to apply your cart discount. Then unlock Tier 2 for free shipping.",
+      ),
+      tier1Label: String(uiTier1Label || "Discount"),
+      tier2Label: String(uiTier2Label || "Free shipping"),
+      tier1Icon: String(uiTier1Icon || "%"),
+      tier2Icon: String(uiTier2Icon || "🚚"),
+      primaryColor: String(uiPrimaryColor || "#166534"),
+      trackColor: String(uiTrackColor || "#cbd5e1"),
+      textColor: String(uiTextColor || "#0f172a"),
+      mutedTextColor: String(uiMutedTextColor || "#64748b"),
+      cardBackground: String(uiCardBackground || "#ffffff"),
+      borderColor: String(uiBorderColor || "#d1d5db"),
+      iconBackground: String(uiIconBackground || "#166534"),
+      iconTextColor: String(uiIconTextColor || "#ffffff"),
+      showProgressBar:
+        String(uiShowProgressBar || "true").toLowerCase() === "false"
+          ? "false"
+          : "true",
     },
   });
 }
@@ -4500,12 +4598,185 @@ function formatCodeDiscountValue(discount) {
   return null;
 }
 
+const AUTO_TIER_DISCOUNT_TITLE = "Threshold Tiers Auto Discount";
+
+function normalizeTierRows(rows) {
+  return (rows || [])
+    .map((row) => ({
+      id: row.id,
+      name: String(row.name || "Tier"),
+      minSubtotal: Number(row.minSubtotal || 0),
+      rewardType:
+        String(row.rewardType || "").toUpperCase() === "FREE_SHIPPING"
+          ? "FREE_SHIPPING"
+          : "PERCENTAGE",
+      discountPercent:
+        row.discountPercent == null ? null : Number(row.discountPercent),
+      message: String(row.message || ""),
+      position: Number(row.position || 0),
+      active: row.active !== false,
+    }))
+    .filter((row) => Number.isFinite(row.minSubtotal))
+    .sort((a, b) => a.minSubtotal - b.minSubtotal);
+}
+
+function resolveApplicableTier(tiers, subtotal) {
+  const sorted = normalizeTierRows(tiers);
+  let matched = null;
+  for (const tier of sorted) {
+    if (!tier.active) continue;
+    if (subtotal >= tier.minSubtotal) matched = tier;
+  }
+  return matched;
+}
+
+function tiersToFunctionConfig(tiers) {
+  const sorted = normalizeTierRows(tiers).filter((t) => t.active);
+  const tier1 = sorted[0] || {
+    minSubtotal: 500,
+    rewardType: "FREE_SHIPPING",
+    discountPercent: 0,
+    message: "Free shipping unlocked",
+  };
+  const tier2 = sorted[1] || {
+    minSubtotal: 1000,
+    rewardType: "PERCENTAGE",
+    discountPercent: 20,
+    message: "20% discount unlocked",
+  };
+
+  return JSON.stringify({
+    tiers: sorted.map((tier, idx) => ({
+      id: tier.id || `tier-${idx + 1}`,
+      name: tier.name || `Tier ${idx + 1}`,
+      minSubtotal: tier.minSubtotal,
+      rewardType: tier.rewardType,
+      discountPercentage:
+        tier.rewardType === "PERCENTAGE"
+          ? Number(tier.discountPercent || 0)
+          : 0,
+      message: tier.message || "",
+      position: idx + 1,
+      active: tier.active !== false,
+    })),
+    thresholdTiers: {
+      tier1: {
+        type:
+          tier1.rewardType === "FREE_SHIPPING" ? "FREE_SHIPPING" : "DISCOUNT",
+        minSubtotal: tier1.minSubtotal,
+        discountPercentage:
+          tier1.rewardType === "PERCENTAGE"
+            ? Number(tier1.discountPercent || 0)
+            : 0,
+        message: tier1.message || "",
+      },
+      tier2: {
+        minSubtotal: tier2.minSubtotal,
+        discountPercentage:
+          tier2.rewardType === "PERCENTAGE"
+            ? Number(tier2.discountPercent || 0)
+            : 0,
+        message: tier2.message || "",
+      },
+    },
+    order: {
+      valueType: "PERCENTAGE",
+      amountOff: 0,
+      percentage:
+        tier2.rewardType === "PERCENTAGE"
+          ? Number(tier2.discountPercent || 0)
+          : 0,
+      message: tier2.message || "Tier discount unlocked",
+      selectionStrategy: "MAXIMUM",
+    },
+    product: {
+      valueType: "PERCENTAGE",
+      amountOff: 0,
+      percentage: 0,
+      message: "",
+      selectionStrategy: "FIRST",
+    },
+    shipping: {
+      percentage: tier1.rewardType === "FREE_SHIPPING" ? 100 : 0,
+      message: tier1.message || "Free shipping unlocked",
+    },
+  });
+}
+
+async function syncAutoTierDiscount(admin, tiers) {
+  const activeTiers = normalizeTierRows(tiers).filter((tier) => tier.active);
+  if (!activeTiers.length) return { ok: true, skipped: true };
+
+  const appDiscountTypesResp = await admin.graphql(LIST_APP_DISCOUNT_TYPES);
+  const appDiscountTypesJson = await appDiscountTypesResp.json();
+  const functionId = appDiscountTypesJson?.data?.appDiscountTypes?.[0]?.functionId;
+  if (!functionId) {
+    return { ok: false, error: "No app discount function found to bind tiers." };
+  }
+
+  const listResp = await admin.graphql(LIST_DISCOUNTS, { variables: { first: 50 } });
+  const listJson = await listResp.json();
+  const existing = (listJson?.data?.discountNodes?.nodes || []).find((node) => {
+    const discount = node?.discount;
+    return (
+      discount?.__typename === "DiscountAutomaticApp" &&
+      discount?.title === AUTO_TIER_DISCOUNT_TITLE &&
+      discount?.appDiscountType?.functionId === functionId
+    );
+  });
+
+  const hasFreeShippingTier = activeTiers.some(
+    (tier) => tier.rewardType === "FREE_SHIPPING",
+  );
+  const automaticAppDiscount = {
+    title: AUTO_TIER_DISCOUNT_TITLE,
+    functionId,
+    startsAt: new Date().toISOString(),
+    discountClasses: hasFreeShippingTier ? ["ORDER", "SHIPPING"] : ["ORDER"],
+    appliesOnOneTimePurchase: true,
+    appliesOnSubscription: false,
+    combinesWith: {
+      orderDiscounts: false,
+      productDiscounts: false,
+      shippingDiscounts: false,
+    },
+    metafields: [
+      {
+        namespace: "default",
+        key: "function-configuration",
+        type: "json",
+        value: tiersToFunctionConfig(activeTiers),
+      },
+    ],
+  };
+
+  if (existing?.id) {
+    const mutationId = toMutationId(existing.id, "DiscountAutomaticApp");
+    const updateResp = await admin.graphql(UPDATE_CUSTOM, {
+      variables: { id: mutationId, automaticAppDiscount },
+    });
+    const updateJson = await updateResp.json();
+    const errors = updateJson?.data?.discountAutomaticAppUpdate?.userErrors || [];
+    if (errors.length) return { ok: false, error: errors[0]?.message || "Update failed" };
+    return { ok: true, updated: true };
+  }
+
+  const createResp = await admin.graphql(CREATE_CUSTOM, {
+    variables: { automaticAppDiscount },
+  });
+  const createJson = await createResp.json();
+  const errors = createJson?.data?.discountAutomaticAppCreate?.userErrors || [];
+  if (errors.length) return { ok: false, error: errors[0]?.message || "Create failed" };
+  return { ok: true, created: true };
+}
+
 // ─── Loader ──────────────────────────────────────────────────────────────────
 
 export const loader = async ({ request }) => {
-  const { admin } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const url = new URL(request.url);
   const editId = url.searchParams.get("editId");
+  const previewSubtotal = Number(url.searchParams.get("previewSubtotal") || 0);
 
   const response = await admin.graphql(LIST_DISCOUNTS, { variables: { first: 50 } });
   const json = await response.json();
@@ -4566,19 +4837,112 @@ export const loader = async ({ request }) => {
     functionConfig,
   } : null;
 
-  return { nodes, appDiscountTypes, editDiscount, errors: json?.errors || null };
+  const tierRules = await prisma.thresholdTier.findMany({
+    where: { shop: session.shop, active: true },
+    orderBy: [{ minSubtotal: "asc" }, { position: "asc" }],
+  });
+  const previewTier =
+    Number.isFinite(previewSubtotal) && previewSubtotal > 0
+      ? resolveApplicableTier(tierRules, previewSubtotal)
+      : null;
+
+  return {
+    nodes,
+    appDiscountTypes,
+    editDiscount,
+    tierRules,
+    previewSubtotal: Number.isFinite(previewSubtotal) ? previewSubtotal : 0,
+    previewTier,
+    errors: json?.errors || null,
+  };
 };
 
 // ─── Action ──────────────────────────────────────────────────────────────────
 
 export const action = async ({ request }) => {
-  const { admin } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const formData = await request.formData();
   const intent = String(formData.get("intent") || "");
   const id = String(formData.get("id") || "");
   const modeRaw = String(formData.get("mode") || "code").trim().toLowerCase();
   const mode = modeRaw === "custom" ? "custom" : "code";
   const discountType = String(formData.get("discountType") || "");
+
+  if (intent === "tier-create" || intent === "tier-update" || intent === "tier-delete") {
+    if (intent === "tier-delete") {
+      if (!id) return { ok: false, errors: { tier: "Tier id is required" } };
+      await prisma.thresholdTier.deleteMany({ where: { id, shop: session.shop } });
+      const tiers = await prisma.thresholdTier.findMany({
+        where: { shop: session.shop, active: true },
+        orderBy: [{ minSubtotal: "asc" }, { position: "asc" }],
+      });
+      const syncResult = await syncAutoTierDiscount(admin, tiers);
+      if (!syncResult.ok) return { ok: false, errors: { tier: syncResult.error } };
+      return { ok: true, tierIntent: intent };
+    }
+
+    const tierName = String(formData.get("tierName") || "").trim();
+    const minSubtotal = Number(String(formData.get("tierMinSubtotal") || "").trim());
+    const rewardTypeRaw = String(formData.get("tierRewardType") || "FREE_SHIPPING")
+      .trim()
+      .toUpperCase();
+    const rewardType = rewardTypeRaw === "FREE_SHIPPING" ? "FREE_SHIPPING" : "PERCENTAGE";
+    const discountPercentRaw = String(formData.get("tierDiscountPercent") || "").trim();
+    const discountPercent =
+      discountPercentRaw === "" ? null : Number(discountPercentRaw);
+    const message = String(formData.get("tierMessage") || "").trim();
+
+    const tierErrors = {};
+    if (!tierName) tierErrors.tierName = "Tier name is required";
+    if (!Number.isFinite(minSubtotal) || minSubtotal < 0) {
+      tierErrors.tierMinSubtotal = "Minimum cart value must be 0 or more";
+    }
+    if (
+      rewardType === "PERCENTAGE" &&
+      (!Number.isFinite(discountPercent) || discountPercent <= 0 || discountPercent > 100)
+    ) {
+      tierErrors.tierDiscountPercent = "Discount % must be between 1 and 100";
+    }
+    if (Object.keys(tierErrors).length) return { ok: false, errors: tierErrors };
+
+    if (intent === "tier-update") {
+      if (!id) return { ok: false, errors: { tier: "Tier id is required for update" } };
+      await prisma.thresholdTier.updateMany({
+        where: { id, shop: session.shop },
+        data: {
+          name: tierName,
+          minSubtotal,
+          rewardType,
+          discountPercent: rewardType === "PERCENTAGE" ? discountPercent : null,
+          message,
+        },
+      });
+    } else {
+      const currentCount = await prisma.thresholdTier.count({
+        where: { shop: session.shop, active: true },
+      });
+      await prisma.thresholdTier.create({
+        data: {
+          shop: session.shop,
+          name: tierName,
+          minSubtotal,
+          rewardType,
+          discountPercent: rewardType === "PERCENTAGE" ? discountPercent : null,
+          message,
+          position: currentCount + 1,
+          active: true,
+        },
+      });
+    }
+
+    const tiers = await prisma.thresholdTier.findMany({
+      where: { shop: session.shop, active: true },
+      orderBy: [{ minSubtotal: "asc" }, { position: "asc" }],
+    });
+    const syncResult = await syncAutoTierDiscount(admin, tiers);
+    if (!syncResult.ok) return { ok: false, errors: { tier: syncResult.error } };
+    return { ok: true, tierIntent: intent };
+  }
 
   if (intent === "delete") {
     const isAutomatic = discountType === "DiscountAutomaticApp";
@@ -4606,19 +4970,51 @@ export const action = async ({ request }) => {
   const discountClassProduct = String(formData.get("discountClassProduct") || "") === "on";
   const discountClassOrder = String(formData.get("discountClassOrder") || "") === "on";
   const discountClassShipping = String(formData.get("discountClassShipping") || "") === "on";
-  const discountClasses = [
-    ...(discountClassProduct ? ["PRODUCT"] : []),
-    ...(discountClassOrder ? ["ORDER"] : []),
-    ...(discountClassShipping ? ["SHIPPING"] : []),
+  const orderPercentageRaw = String(formData.get("orderPercentage") ?? "").trim();
+  const productPercentageRaw = String(formData.get("productPercentage") ?? "").trim();
+  const shippingPercentageRaw = String(formData.get("shippingPercentage") ?? "").trim();
+  const orderPercentage = Number(orderPercentageRaw);
+  const productPercentage = Number(productPercentageRaw);
+  const shippingPercentage = Number(shippingPercentageRaw);
+  const tier1Type = String(formData.get("tier1Type") || "FREE_SHIPPING").trim().toUpperCase();
+  const tier1MinSubtotal = Number(String(formData.get("tier1MinSubtotal") ?? "").trim());
+  const tier1DiscountPercentage = Number(String(formData.get("tier1DiscountPercentage") ?? "").trim());
+  const tier1Message = String(formData.get("tier1Message") ?? "").trim();
+  const tier2MinSubtotal = Number(String(formData.get("tier2MinSubtotal") ?? "").trim());
+  const tier2DiscountPercentage = Number(String(formData.get("tier2DiscountPercentage") ?? "").trim());
+  const tier2Message = String(formData.get("tier2Message") ?? "").trim();
+  const autoDiscountClasses = [
+    "ORDER",
+    ...(tier1Type === "FREE_SHIPPING" ? ["SHIPPING"] : []),
   ];
-  const orderPercentage = Number(String(formData.get("orderPercentage") ?? "").trim());
-  const productPercentage = Number(String(formData.get("productPercentage") ?? "").trim());
-  const shippingPercentage = Number(String(formData.get("shippingPercentage") ?? "").trim());
+  const discountClasses = autoDiscountClasses;
   const orderMessage = String(formData.get("orderMessage") ?? "").trim();
   const productMessage = String(formData.get("productMessage") ?? "").trim();
   const shippingMessage = String(formData.get("shippingMessage") ?? "").trim();
+  const resolvedOrderPercentage = tier2DiscountPercentage;
+  const resolvedProductPercentage = 0;
+  const resolvedShippingPercentage = tier1Type === "FREE_SHIPPING" ? 100 : 0;
+  const resolvedOrderMessage = orderMessage || tier2Message || "Tier 2 discount unlocked";
+  const resolvedProductMessage = productMessage || "Tier discount";
+  const resolvedShippingMessage =
+    shippingMessage || tier1Message || "Free shipping unlocked";
   const orderSelectionStrategy = String(formData.get("orderSelectionStrategy") || "FIRST").trim().toUpperCase();
   const productSelectionStrategy = String(formData.get("productSelectionStrategy") || "FIRST").trim().toUpperCase();
+  const uiWidgetTitle = String(formData.get("uiWidgetTitle") ?? "").trim();
+  const uiWidgetSubtitle = String(formData.get("uiWidgetSubtitle") ?? "").trim();
+  const uiTier1Label = String(formData.get("uiTier1Label") ?? "").trim();
+  const uiTier2Label = String(formData.get("uiTier2Label") ?? "").trim();
+  const uiTier1Icon = String(formData.get("uiTier1Icon") ?? "").trim();
+  const uiTier2Icon = String(formData.get("uiTier2Icon") ?? "").trim();
+  const uiPrimaryColor = String(formData.get("uiPrimaryColor") ?? "").trim();
+  const uiTrackColor = String(formData.get("uiTrackColor") ?? "").trim();
+  const uiTextColor = String(formData.get("uiTextColor") ?? "").trim();
+  const uiMutedTextColor = String(formData.get("uiMutedTextColor") ?? "").trim();
+  const uiCardBackground = String(formData.get("uiCardBackground") ?? "").trim();
+  const uiBorderColor = String(formData.get("uiBorderColor") ?? "").trim();
+  const uiIconBackground = String(formData.get("uiIconBackground") ?? "").trim();
+  const uiIconTextColor = String(formData.get("uiIconTextColor") ?? "").trim();
+  const uiShowProgressBar = String(formData.get("uiShowProgressBar") ?? "true").trim().toLowerCase();
   const discountValueType = String(formData.get("discountValueType") || "PERCENTAGE").trim().toUpperCase();
   const percentage = Number(String(formData.get("percentage") || "").trim());
   const amountOff = Number(String(formData.get("amountOff") || "").trim());
@@ -4637,17 +5033,37 @@ export const action = async ({ request }) => {
   if (mode === "code" && !code) errors.code = "Code is required";
   if (mode === "custom" && !functionId && !functionHandle)
     errors.functionId = "Function ID or Function Handle is required";
-  if (mode === "custom" && !discountClasses.length)
-    errors.discountClasses = "Select at least one discount class (Product, Order, or Shipping)";
-  if (mode === "custom" && (!Number.isFinite(orderPercentage) || orderPercentage < 0 || orderPercentage > 100))
+  if (mode === "custom" && !["FREE_SHIPPING", "DISCOUNT"].includes(tier1Type))
+    errors.tier1Type = "Tier 1 type must be Free shipping or Discount";
+  if (mode === "custom" && (!Number.isFinite(tier1MinSubtotal) || tier1MinSubtotal < 0))
+    errors.tier1MinSubtotal = "Tier 1 minimum cart value must be 0 or more";
+  if (
+    mode === "custom" &&
+    tier1Type === "DISCOUNT" &&
+    (!Number.isFinite(tier1DiscountPercentage) || tier1DiscountPercentage <= 0 || tier1DiscountPercentage > 100)
+  ) {
+    errors.tier1DiscountPercentage = "Tier 1 discount percentage must be between 1 and 100";
+  }
+  if (mode === "custom" && (!Number.isFinite(tier2MinSubtotal) || tier2MinSubtotal < 0))
+    errors.tier2MinSubtotal = "Tier 2 minimum cart value must be 0 or more";
+  if (
+    mode === "custom" &&
+    (!Number.isFinite(tier2DiscountPercentage) || tier2DiscountPercentage <= 0 || tier2DiscountPercentage > 100)
+  ) {
+    errors.tier2DiscountPercentage = "Tier 2 discount percentage must be between 1 and 100";
+  }
+  if (
+    mode === "custom" &&
+    Number.isFinite(tier1MinSubtotal) &&
+    Number.isFinite(tier2MinSubtotal) &&
+    tier2MinSubtotal <= tier1MinSubtotal
+  ) {
+    errors.tier2MinSubtotal = "Tier 2 minimum must be greater than Tier 1 minimum";
+  }
+  if (mode === "custom" && (!Number.isFinite(resolvedOrderPercentage) || resolvedOrderPercentage < 0 || resolvedOrderPercentage > 100))
     errors.orderPercentage = "Order percentage must be between 0 and 100";
-  if (mode === "custom" && (!Number.isFinite(productPercentage) || productPercentage < 0 || productPercentage > 100))
-    errors.productPercentage = "Product percentage must be between 0 and 100";
-  if (mode === "custom" && (!Number.isFinite(shippingPercentage) || shippingPercentage < 0 || shippingPercentage > 100))
+  if (mode === "custom" && (!Number.isFinite(resolvedShippingPercentage) || resolvedShippingPercentage < 0 || resolvedShippingPercentage > 100))
     errors.shippingPercentage = "Shipping percentage must be between 0 and 100";
-  if (mode === "custom" && !orderMessage) errors.orderMessage = "Order discount message is required";
-  if (mode === "custom" && !productMessage) errors.productMessage = "Product discount message is required";
-  if (mode === "custom" && !shippingMessage) errors.shippingMessage = "Shipping discount message is required";
   if (mode === "custom" && !["FIRST", "MAXIMUM"].includes(orderSelectionStrategy))
     errors.orderSelectionStrategy = "Order selection strategy must be FIRST or MAXIMUM";
   if (mode === "custom" && !["ALL", "FIRST", "MAXIMUM"].includes(productSelectionStrategy))
@@ -4714,10 +5130,36 @@ export const action = async ({ request }) => {
         type: "json",
         value: makeFunctionConfig({
           existingConfig: existingFunctionConfig,
+          tier1Type,
+          tier1MinSubtotal,
+          tier1DiscountPercentage,
+          tier1Message,
+          tier2MinSubtotal,
+          tier2DiscountPercentage,
+          tier2Message,
           discountValueType, amountOff,
-          orderPercentage, productPercentage, shippingPercentage,
-          orderMessage, productMessage, shippingMessage,
+          orderPercentage: resolvedOrderPercentage,
+          productPercentage: resolvedProductPercentage,
+          shippingPercentage: resolvedShippingPercentage,
+          orderMessage: resolvedOrderMessage,
+          productMessage: resolvedProductMessage,
+          shippingMessage: resolvedShippingMessage,
           orderSelectionStrategy, productSelectionStrategy,
+          uiWidgetTitle,
+          uiWidgetSubtitle,
+          uiTier1Label,
+          uiTier2Label,
+          uiTier1Icon,
+          uiTier2Icon,
+          uiPrimaryColor,
+          uiTrackColor,
+          uiTextColor,
+          uiMutedTextColor,
+          uiCardBackground,
+          uiBorderColor,
+          uiIconBackground,
+          uiIconTextColor,
+          uiShowProgressBar,
         }),
       }],
     };
@@ -4800,11 +5242,21 @@ function SubHeading({ children }) {
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export default function DiscountsIndex() {
-  const { nodes, appDiscountTypes, errors, editDiscount } = useLoaderData();
+  const { nodes, appDiscountTypes, errors, editDiscount, tierRules, previewTier, previewSubtotal } =
+    useLoaderData();
   const actionData = useActionData();
   const location = useLocation();
   const navigate = useNavigate();
   const submit = useSubmit();
+  const [tierName, setTierName] = useState("");
+  const [tierMinSubtotal, setTierMinSubtotal] = useState("");
+  const [tierRewardType, setTierRewardType] = useState("FREE_SHIPPING");
+  const [tierDiscountPercent, setTierDiscountPercent] = useState("");
+  const [tierMessage, setTierMessage] = useState("");
+  const [tierEditId, setTierEditId] = useState("");
+  const [previewCartTotal, setPreviewCartTotal] = useState(
+    previewSubtotal > 0 ? String(previewSubtotal) : "",
+  );
 
   const [filter, setFilter] = useState("");
   const [mode, setMode] = useState(editDiscount?.mode || "custom");
@@ -4828,11 +5280,35 @@ export default function DiscountsIndex() {
   const [orderPercentage, setOrderPercentage] = useState("");
   const [productPercentage, setProductPercentage] = useState("");
   const [shippingPercentage, setShippingPercentage] = useState("");
+  const [tier1Type, setTier1Type] = useState("FREE_SHIPPING");
+  const [tier1MinSubtotal, setTier1MinSubtotal] = useState("500");
+  const [tier1DiscountPercentage, setTier1DiscountPercentage] = useState("10");
+  const [tier1Message, setTier1Message] = useState("Tier 1 unlocked");
+  const [tier2MinSubtotal, setTier2MinSubtotal] = useState("1000");
+  const [tier2DiscountPercentage, setTier2DiscountPercentage] = useState("20");
+  const [tier2Message, setTier2Message] = useState("Tier 2 unlocked");
   const [orderMessage, setOrderMessage] = useState("");
   const [productMessage, setProductMessage] = useState("");
   const [shippingMessage, setShippingMessage] = useState("");
   const [orderSelectionStrategy, setOrderSelectionStrategy] = useState("FIRST");
   const [productSelectionStrategy, setProductSelectionStrategy] = useState("FIRST");
+  const [uiWidgetTitle, setUiWidgetTitle] = useState("Rewards progress");
+  const [uiWidgetSubtitle, setUiWidgetSubtitle] = useState(
+    "Unlock Tier 1 to apply your cart discount. Then unlock Tier 2 for free shipping.",
+  );
+  const [uiTier1Label, setUiTier1Label] = useState("Discount");
+  const [uiTier2Label, setUiTier2Label] = useState("Free shipping");
+  const [uiTier1Icon, setUiTier1Icon] = useState("%");
+  const [uiTier2Icon, setUiTier2Icon] = useState("🚚");
+  const [uiPrimaryColor, setUiPrimaryColor] = useState("#166534");
+  const [uiTrackColor, setUiTrackColor] = useState("#cbd5e1");
+  const [uiTextColor, setUiTextColor] = useState("#0f172a");
+  const [uiMutedTextColor, setUiMutedTextColor] = useState("#64748b");
+  const [uiCardBackground, setUiCardBackground] = useState("#ffffff");
+  const [uiBorderColor, setUiBorderColor] = useState("#d1d5db");
+  const [uiIconBackground, setUiIconBackground] = useState("#166534");
+  const [uiIconTextColor, setUiIconTextColor] = useState("#ffffff");
+  const [uiShowProgressBar, setUiShowProgressBar] = useState("true");
 
   const editDiscountId = editDiscount?.id || "__new__";
 
@@ -4857,11 +5333,33 @@ export default function DiscountsIndex() {
       setOrderPercentage(cf.orderPercentage);
       setProductPercentage(cf.productPercentage);
       setShippingPercentage(cf.shippingPercentage);
+      setTier1Type(cf.tier1Type);
+      setTier1MinSubtotal(cf.tier1MinSubtotal);
+      setTier1DiscountPercentage(cf.tier1DiscountPercentage);
+      setTier1Message(cf.tier1Message);
+      setTier2MinSubtotal(cf.tier2MinSubtotal);
+      setTier2DiscountPercentage(cf.tier2DiscountPercentage);
+      setTier2Message(cf.tier2Message);
       setOrderMessage(cf.orderMessage);
       setProductMessage(cf.productMessage);
       setShippingMessage(cf.shippingMessage);
       setOrderSelectionStrategy(cf.orderSelectionStrategy);
       setProductSelectionStrategy(cf.productSelectionStrategy);
+      setUiWidgetTitle(cf.uiWidgetTitle);
+      setUiWidgetSubtitle(cf.uiWidgetSubtitle);
+      setUiTier1Label(cf.uiTier1Label);
+      setUiTier2Label(cf.uiTier2Label);
+      setUiTier1Icon(cf.uiTier1Icon);
+      setUiTier2Icon(cf.uiTier2Icon);
+      setUiPrimaryColor(cf.uiPrimaryColor);
+      setUiTrackColor(cf.uiTrackColor);
+      setUiTextColor(cf.uiTextColor);
+      setUiMutedTextColor(cf.uiMutedTextColor);
+      setUiCardBackground(cf.uiCardBackground);
+      setUiBorderColor(cf.uiBorderColor);
+      setUiIconBackground(cf.uiIconBackground);
+      setUiIconTextColor(cf.uiIconTextColor);
+      setUiShowProgressBar(cf.uiShowProgressBar);
     } else {
       setDiscountValueType(editDiscount?.discountValueType || "PERCENTAGE");
       setPercentage(editDiscount?.percentage || "");
@@ -4869,11 +5367,35 @@ export default function DiscountsIndex() {
       setOrderPercentage("");
       setProductPercentage("");
       setShippingPercentage("");
+      setTier1Type("FREE_SHIPPING");
+      setTier1MinSubtotal("500");
+      setTier1DiscountPercentage("10");
+      setTier1Message("Tier 1 unlocked");
+      setTier2MinSubtotal("1000");
+      setTier2DiscountPercentage("20");
+      setTier2Message("Tier 2 unlocked");
       setOrderMessage("");
       setProductMessage("");
       setShippingMessage("");
       setOrderSelectionStrategy("FIRST");
       setProductSelectionStrategy("FIRST");
+      setUiWidgetTitle("Rewards progress");
+      setUiWidgetSubtitle(
+        "Unlock Tier 1 to apply your cart discount. Then unlock Tier 2 for free shipping.",
+      );
+      setUiTier1Label("Discount");
+      setUiTier2Label("Free shipping");
+      setUiTier1Icon("%");
+      setUiTier2Icon("🚚");
+      setUiPrimaryColor("#166534");
+      setUiTrackColor("#cbd5e1");
+      setUiTextColor("#0f172a");
+      setUiMutedTextColor("#64748b");
+      setUiCardBackground("#ffffff");
+      setUiBorderColor("#d1d5db");
+      setUiIconBackground("#166534");
+      setUiIconTextColor("#ffffff");
+      setUiShowProgressBar("true");
     }
     setStartsAt(isoToLocalDateTimeInput(editDiscount?.startsAt || ""));
     setEndsAt(isoToLocalDateTimeInput(editDiscount?.endsAt || ""));
@@ -4901,11 +5423,35 @@ export default function DiscountsIndex() {
       setOrderPercentage("");
       setProductPercentage("");
       setShippingPercentage("");
+      setTier1Type("FREE_SHIPPING");
+      setTier1MinSubtotal("500");
+      setTier1DiscountPercentage("10");
+      setTier1Message("Tier 1 unlocked");
+      setTier2MinSubtotal("1000");
+      setTier2DiscountPercentage("20");
+      setTier2Message("Tier 2 unlocked");
       setOrderMessage("");
       setProductMessage("");
       setShippingMessage("");
       setOrderSelectionStrategy("FIRST");
       setProductSelectionStrategy("FIRST");
+      setUiWidgetTitle("Rewards progress");
+      setUiWidgetSubtitle(
+        "Unlock Tier 1 to apply your cart discount. Then unlock Tier 2 for free shipping.",
+      );
+      setUiTier1Label("Discount");
+      setUiTier2Label("Free shipping");
+      setUiTier1Icon("%");
+      setUiTier2Icon("🚚");
+      setUiPrimaryColor("#166534");
+      setUiTrackColor("#cbd5e1");
+      setUiTextColor("#0f172a");
+      setUiMutedTextColor("#64748b");
+      setUiCardBackground("#ffffff");
+      setUiBorderColor("#d1d5db");
+      setUiIconBackground("#166534");
+      setUiIconTextColor("#ffffff");
+      setUiShowProgressBar("true");
     }
   }, [actionData]);
 
@@ -4981,26 +5527,211 @@ export default function DiscountsIndex() {
     ],
   );
 
+  const previewSubtotalValue = Number(previewCartTotal || 0);
+  const previewTier1Min = Number(tier1MinSubtotal || 0);
+  const previewTier2Min = Number(tier2MinSubtotal || 0);
+  const previewTier1Reached = Number.isFinite(previewTier1Min) && previewSubtotalValue >= previewTier1Min;
+  const previewTier2Reached = Number.isFinite(previewTier2Min) && previewSubtotalValue >= previewTier2Min;
+  const previewProgress = previewTier2Reached ? 100 : previewTier1Reached ? 50 : 0;
+  const previewBarWidth = `${Math.max(0, Math.min(100, previewProgress))}%`;
+  const resolvedTier1Caption =
+    tier1Type === "DISCOUNT"
+      ? `${tier1DiscountPercentage || 0}% OFF`
+      : "Free shipping";
+  const resolvedTier2Caption = `${tier2DiscountPercentage || 0}% OFF`;
+
   return (
     <s-page heading="Discounts">
+      <s-section heading="Tier-based discount system">
+        <s-stack direction="block" gap="base">
+          <s-box padding="base" borderWidth="base" borderRadius="base">
+            <Form method="post">
+              <input type="hidden" name="intent" value={tierEditId ? "tier-update" : "tier-create"} />
+              {tierEditId ? <input type="hidden" name="id" value={tierEditId} /> : null}
+              <s-grid gridTemplateColumns="1fr 1fr" gap="base">
+                <s-text-field
+                  name="tierName"
+                  label="Tier name"
+                  value={tierName}
+                  onChange={(e) => setTierName(e.currentTarget.value)}
+                  error={actionData?.errors?.tierName}
+                  autocomplete="off"
+                />
+                <s-text-field
+                  name="tierMinSubtotal"
+                  label="Minimum cart value"
+                  value={tierMinSubtotal}
+                  onChange={(e) => setTierMinSubtotal(e.currentTarget.value)}
+                  error={actionData?.errors?.tierMinSubtotal}
+                  type="number"
+                  min="0"
+                  autocomplete="off"
+                />
+              </s-grid>
+              <s-grid gridTemplateColumns="1fr 1fr" gap="base">
+                <s-select
+                  name="tierRewardType"
+                  label="Discount type"
+                  value={tierRewardType}
+                  onChange={(e) => setTierRewardType(e.currentTarget.value)}
+                >
+                  <s-option value="FREE_SHIPPING">Free Shipping</s-option>
+                  <s-option value="PERCENTAGE">Percentage Discount</s-option>
+                </s-select>
+                {tierRewardType === "PERCENTAGE" ? (
+                  <s-text-field
+                    name="tierDiscountPercent"
+                    label="Discount %"
+                    value={tierDiscountPercent}
+                    onChange={(e) => setTierDiscountPercent(e.currentTarget.value)}
+                    error={actionData?.errors?.tierDiscountPercent}
+                    type="number"
+                    min="1"
+                    max="100"
+                    autocomplete="off"
+                  />
+                ) : (
+                  <s-box padding="small" borderWidth="base" borderRadius="base" background="subdued">
+                    <s-text tone="neutral">Free shipping will be auto-applied at this tier.</s-text>
+                  </s-box>
+                )}
+              </s-grid>
+              <s-text-field
+                name="tierMessage"
+                label="Tier message"
+                value={tierMessage}
+                onChange={(e) => setTierMessage(e.currentTarget.value)}
+                autocomplete="off"
+              />
+              <s-stack direction="inline" gap="small">
+                <s-button type="submit" variant="primary">
+                  {tierEditId ? "Update Tier" : "Add Tier"}
+                </s-button>
+                {tierEditId ? (
+                  <s-button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => {
+                      setTierEditId("");
+                      setTierName("");
+                      setTierMinSubtotal("");
+                      setTierRewardType("FREE_SHIPPING");
+                      setTierDiscountPercent("");
+                      setTierMessage("");
+                    }}
+                  >
+                    Cancel
+                  </s-button>
+                ) : null}
+              </s-stack>
+            </Form>
+          </s-box>
+
+          <s-table variant="auto">
+            <s-table-header-row>
+              <s-table-header listSlot="primary">Tier</s-table-header>
+              <s-table-header listSlot="inline">Min cart</s-table-header>
+              <s-table-header listSlot="inline">Type</s-table-header>
+              <s-table-header listSlot="inline">Value</s-table-header>
+              <s-table-header listSlot="labeled">Message</s-table-header>
+              <s-table-header listSlot="inline">Actions</s-table-header>
+            </s-table-header-row>
+            <s-table-body>
+              {(tierRules || []).map((tier) => (
+                <s-table-row key={tier.id}>
+                  <s-table-cell><s-text type="strong">{tier.name}</s-text></s-table-cell>
+                  <s-table-cell>{tier.minSubtotal}</s-table-cell>
+                  <s-table-cell>{tier.rewardType === "FREE_SHIPPING" ? "Free Shipping" : "Percentage"}</s-table-cell>
+                  <s-table-cell>{tier.rewardType === "PERCENTAGE" ? `${tier.discountPercent || 0}%` : "—"}</s-table-cell>
+                  <s-table-cell>{tier.message || "—"}</s-table-cell>
+                  <s-table-cell>
+                    <s-stack direction="inline" gap="small">
+                      <s-button
+                        type="button"
+                        variant="tertiary"
+                        onClick={() => {
+                          setTierEditId(tier.id);
+                          setTierName(tier.name || "");
+                          setTierMinSubtotal(String(tier.minSubtotal ?? ""));
+                          setTierRewardType(
+                            tier.rewardType === "FREE_SHIPPING"
+                              ? "FREE_SHIPPING"
+                              : "PERCENTAGE",
+                          );
+                          setTierDiscountPercent(
+                            tier.discountPercent == null
+                              ? ""
+                              : String(tier.discountPercent),
+                          );
+                          setTierMessage(tier.message || "");
+                        }}
+                      >
+                        Edit
+                      </s-button>
+                      <s-button
+                        type="button"
+                        variant="tertiary"
+                        tone="critical"
+                        onClick={() => {
+                          const fd = new FormData();
+                          fd.set("intent", "tier-delete");
+                          fd.set("id", tier.id);
+                          submit(fd, { method: "post" });
+                        }}
+                      >
+                        Delete
+                      </s-button>
+                    </s-stack>
+                  </s-table-cell>
+                </s-table-row>
+              ))}
+            </s-table-body>
+          </s-table>
+
+          <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
+            <s-stack direction="block" gap="small">
+              <s-text type="strong">Real-time preview (highest tier wins)</s-text>
+              <s-text-field
+                label="Preview cart total"
+                value={previewCartTotal}
+                onChange={(e) => setPreviewCartTotal(e.currentTarget.value)}
+                type="number"
+                min="0"
+                autocomplete="off"
+              />
+              <s-button
+                type="button"
+                onClick={() => {
+                  const params = new URLSearchParams(location.search);
+                  params.set("previewSubtotal", previewCartTotal || "0");
+                  navigate(`${location.pathname}?${params.toString()}`);
+                }}
+              >
+                Preview
+              </s-button>
+              {previewTier ? (
+                <s-text tone="success">
+                  Applied tier: {previewTier.name} (
+                  {previewTier.rewardType === "FREE_SHIPPING"
+                    ? "Free Shipping"
+                    : `${previewTier.discountPercent || 0}% Discount`}
+                  )
+                </s-text>
+              ) : (
+                <s-text tone="neutral">No tier unlocked for current preview subtotal.</s-text>
+              )}
+            </s-stack>
+          </s-box>
+        </s-stack>
+      </s-section>
+
       {/* ── Create / Edit form ─────────────────────────────────────────────── */}
       <s-section heading={editDiscount ? "Edit discount" : "Create discount"}>
         <Form method="post" onSubmit={handleDiscountFormSubmit}>
           <s-stack direction="block" gap="base">
             {/* 1. Basic settings */}
             <SectionCard step="1" title="Basic settings">
-              <s-select
-                name="mode"
-                label="Discount mode"
-                value={mode}
-                details=""
-                placeholder=""
-                onChange={(e) => setMode(e.currentTarget.value)}
-                error={actionData?.errors?.mode}
-              >
-                <s-option value="custom">Automatic (app function)</s-option>
-                <s-option value="code">Code discount</s-option>
-              </s-select>
+              <input type="hidden" name="mode" value="custom" />
 
               <s-text-field
                 name="title"
@@ -5011,77 +5742,27 @@ export default function DiscountsIndex() {
                 autocomplete="off"
               />
 
-              {mode === "code" ? (
-                <s-text-field
-                  name="code"
-                  label="Discount code (e.g. SUMMER20)"
-                  value={code}
-                  onChange={(e) => setCode(e.currentTarget.value)}
-                  error={actionData?.errors?.code}
-                  autocomplete="off"
-                />
-              ) : (
-                <s-stack direction="block" gap="small">
-                  {functionOptions.length > 0 ? (
-                    <s-box padding="small" borderWidth="base" borderRadius="base" background="subdued">
-                      <s-stack direction="inline" gap="small" alignItems="center">
-                        <s-icon type="check-circle" tone="success" size="small" />
-                        <s-text>Function ID: {functionId || "none"}</s-text>
-                      </s-stack>
-                    </s-box>
-                  ) : (
-                    <s-banner tone="warning" heading="No discount functions found">
-                      Deploy your discount function and refresh this page.
-                    </s-banner>
-                  )}
-                  {actionData?.errors?.functionId ? (
-                    <s-text tone="critical">{actionData.errors.functionId}</s-text>
-                  ) : null}
-                </s-stack>
-              )}
+              <s-stack direction="block" gap="small">
+                {functionOptions.length > 0 ? (
+                  <s-box padding="small" borderWidth="base" borderRadius="base" background="subdued">
+                    <s-stack direction="inline" gap="small" alignItems="center">
+                      <s-icon type="check-circle" tone="success" size="small" />
+                      <s-text>Automatic app-function mode enabled</s-text>
+                    </s-stack>
+                  </s-box>
+                ) : (
+                  <s-banner tone="warning" heading="No discount functions found">
+                    Deploy your discount function and refresh this page.
+                  </s-banner>
+                )}
+                {actionData?.errors?.functionId ? (
+                  <s-text tone="critical">{actionData.errors.functionId}</s-text>
+                ) : null}
+              </s-stack>
             </SectionCard>
 
-            {/* 2. Discount value */}
-            <SectionCard step="2" title="Discount value">
-              <s-select
-                name="discountValueType"
-                label="Discount type"
-                value={discountValueType}
-                details=""
-                placeholder=""
-                onChange={(e) => setDiscountValueType(e.currentTarget.value)}
-                error={actionData?.errors?.discountValueType}
-              >
-                <s-option value="PERCENTAGE">Percentage off (%)</s-option>
-                <s-option value="FIXED_AMOUNT">Fixed price off ($)</s-option>
-              </s-select>
-
-            {discountValueType === "PERCENTAGE" ? (
-              <s-text-field
-                name="percentage"
-                label="Percentage off (e.g. 10 for 10%)"
-                value={percentage}
-                onChange={(e) => setPercentage(e.currentTarget.value)}
-                error={actionData?.errors?.percentage}
-                autocomplete="off"
-                type="number"
-                min="1"
-                max="100"
-              />
-            ) : (
-              <s-text-field
-                name="amountOff"
-                label="Fixed price off amount (e.g. 5.00)"
-                value={amountOff}
-                onChange={(e) => setAmountOff(e.currentTarget.value)}
-                error={actionData?.errors?.amountOff}
-                autocomplete="off"
-                type="number"
-                min="0.01"
-                step="0.01"
-              />
-            )}
-            </SectionCard>
+            {/* 2. Tier setup */}
+          
 
             {/* 3. Schedule and audience */}
             <SectionCard step="3" title="Schedule & audience">
@@ -5140,152 +5821,27 @@ export default function DiscountsIndex() {
               </s-stack>
             </SectionCard>
 
-            {/* 5. Custom function options (automatic mode only) */}
+            {/* 5. Internal auto-configuration */}
             {mode === "custom" && (
-              <SectionCard step="5" title="Custom function options">
-                <SubHeading>Discount classes</SubHeading>
-                <s-stack direction="block" gap="small">
-                  <s-checkbox
-                    name="discountClassProduct"
-                    value="on"
-                    label="Product discounts"
-                    checked={discountClassProduct}
-                    onChange={(e) => setDiscountClassProduct(e.currentTarget.checked)}
-                  />
-                  <s-checkbox
-                    name="discountClassOrder"
-                    value="on"
-                    label="Order discounts"
-                    checked={discountClassOrder}
-                    onChange={(e) => setDiscountClassOrder(e.currentTarget.checked)}
-                  />
-                  <s-checkbox
-                    name="discountClassShipping"
-                    value="on"
-                    label="Shipping discounts"
-                    checked={discountClassShipping}
-                    onChange={(e) => setDiscountClassShipping(e.currentTarget.checked)}
-                  />
-                </s-stack>
-                {actionData?.errors?.discountClasses ? (
-                  <s-text tone="critical">{actionData.errors.discountClasses}</s-text>
-                ) : null}
-
-                <s-divider />
-                <SubHeading>Per-class percentages</SubHeading>
-                <s-stack direction="block" gap="base">
-                  <s-grid gridTemplateColumns="1fr 1fr" gap="base">
-                    <s-text-field
-                      name="orderPercentage"
-                      label="Order discount %"
-                      value={orderPercentage}
-                      onChange={(e) => setOrderPercentage(e.currentTarget.value)}
-                      error={actionData?.errors?.orderPercentage}
-                      autocomplete="off"
-                      type="number"
-                      min="0"
-                      max="100"
-                    />
-                    <s-text-field
-                      name="productPercentage"
-                      label="Product discount %"
-                      value={productPercentage}
-                      onChange={(e) => setProductPercentage(e.currentTarget.value)}
-                      error={actionData?.errors?.productPercentage}
-                      autocomplete="off"
-                      type="number"
-                      min="0"
-                      max="100"
-                    />
-                  </s-grid>
-                  <s-text-field
-                    name="shippingPercentage"
-                    label="Shipping discount %"
-                    value={shippingPercentage}
-                    onChange={(e) => setShippingPercentage(e.currentTarget.value)}
-                    error={actionData?.errors?.shippingPercentage}
-                    autocomplete="off"
-                    type="number"
-                    min="0"
-                    max="100"
-                  />
-                </s-stack>
-
-                <s-divider />
-                <SubHeading>Customer-facing messages</SubHeading>
-                <s-text-field
-                  name="orderMessage"
-                  label="Order discount message"
-                  value={orderMessage}
-                  onChange={(e) => setOrderMessage(e.currentTarget.value)}
-                  error={actionData?.errors?.orderMessage}
-                  autocomplete="off"
-                />
-                <s-text-field
-                  name="productMessage"
-                  label="Product discount message"
-                  value={productMessage}
-                  onChange={(e) => setProductMessage(e.currentTarget.value)}
-                  error={actionData?.errors?.productMessage}
-                  autocomplete="off"
-                />
-                <s-text-field
-                  name="shippingMessage"
-                  label="Shipping discount message"
-                  value={shippingMessage}
-                  onChange={(e) => setShippingMessage(e.currentTarget.value)}
-                  error={actionData?.errors?.shippingMessage}
-                  autocomplete="off"
-                />
-
-                <s-divider />
-                <SubHeading>Selection strategies</SubHeading>
-                <s-stack direction="block" gap="base">
-                  <s-select
-                    name="orderSelectionStrategy"
-                    label="Order selection strategy"
-                    value={orderSelectionStrategy}
-                    details=""
-                    placeholder=""
-                    onChange={(e) => setOrderSelectionStrategy(e.currentTarget.value)}
-                    error={actionData?.errors?.orderSelectionStrategy}
-                  >
-                    <s-option value="FIRST">FIRST</s-option>
-                    <s-option value="MAXIMUM">MAXIMUM</s-option>
-                  </s-select>
-                  <s-select
-                    name="productSelectionStrategy"
-                    label="Product selection strategy"
-                    value={productSelectionStrategy}
-                    details=""
-                    placeholder=""
-                    onChange={(e) => setProductSelectionStrategy(e.currentTarget.value)}
-                    error={actionData?.errors?.productSelectionStrategy}
-                  >
-                    <s-option value="ALL">ALL</s-option>
-                    <s-option value="FIRST">FIRST</s-option>
-                    <s-option value="MAXIMUM">MAXIMUM</s-option>
-                  </s-select>
-                </s-stack>
-
-                <s-divider />
-                <SubHeading>Application scope</SubHeading>
-                <s-stack direction="block" gap="small">
-                  <s-checkbox
-                    name="appliesOnOneTimePurchase"
-                    value="on"
-                    label="Applies on one-time purchases"
-                    checked={appliesOnOneTimePurchase}
-                    onChange={(e) => setAppliesOnOneTimePurchase(e.currentTarget.checked)}
-                  />
-                  <s-checkbox
-                    name="appliesOnSubscription"
-                    value="on"
-                    label="Applies on subscriptions"
-                    checked={appliesOnSubscription}
-                    onChange={(e) => setAppliesOnSubscription(e.currentTarget.checked)}
-                  />
-                </s-stack>
+              <SectionCard step="5" title="Automatic setup details">
+                <s-box padding="small" borderWidth="base" borderRadius="base" background="subdued">
+                  <s-text tone="neutral">
+                    Discount classes and percentage application are configured automatically from Tier 1/Tier 2 settings.
+                  </s-text>
+                </s-box>
+                <input type="hidden" name="discountClassProduct" value="" />
+                <input type="hidden" name="discountClassOrder" value="on" />
+                <input type="hidden" name="discountClassShipping" value={tier1Type === "FREE_SHIPPING" ? "on" : ""} />
+                <input type="hidden" name="orderPercentage" value={tier2DiscountPercentage} />
+                <input type="hidden" name="productPercentage" value="0" />
+                <input type="hidden" name="shippingPercentage" value={tier1Type === "FREE_SHIPPING" ? "100" : "0"} />
+                <input type="hidden" name="orderMessage" value={tier2Message} />
+                <input type="hidden" name="productMessage" value="" />
+                <input type="hidden" name="shippingMessage" value={tier1Message} />
+                <input type="hidden" name="orderSelectionStrategy" value="MAXIMUM" />
+                <input type="hidden" name="productSelectionStrategy" value="FIRST" />
+                <input type="hidden" name="appliesOnOneTimePurchase" value="on" />
+                <input type="hidden" name="appliesOnSubscription" value="" /> 
               </SectionCard>
             )}
 
@@ -5401,7 +5957,7 @@ export default function DiscountsIndex() {
                       </s-table-cell>
                       <s-table-cell>
                         <s-stack direction="inline" gap="small-100">
-                          <s-button
+                          <s-button 
                             type="button"
                             variant="tertiary"
                             icon="edit"
@@ -5440,6 +5996,314 @@ export default function DiscountsIndex() {
           )}
         </s-stack>
       </s-section>
+
+      <SectionCard step="2" title="Tier setup">
+              <SubHeading>Threshold tiers (single-page dynamic setup)</SubHeading>
+              <s-select
+                name="tier1Type"
+                label="Tier 1 reward type"
+                value={tier1Type}
+                details="Choose free shipping or discount when tier 1 threshold is reached"
+                placeholder=""
+                onChange={(e) => setTier1Type(e.currentTarget.value)}
+                error={actionData?.errors?.tier1Type}
+              >
+                <s-option value="FREE_SHIPPING">Free shipping</s-option>
+                <s-option value="DISCOUNT">Discount</s-option>
+              </s-select>
+              <s-grid gridTemplateColumns="1fr 1fr" gap="base">
+                <s-text-field
+                  name="tier1MinSubtotal"
+                  label="Tier 1 minimum cart value"
+                  value={tier1MinSubtotal}
+                  onChange={(e) => setTier1MinSubtotal(e.currentTarget.value)}
+                  error={actionData?.errors?.tier1MinSubtotal}
+                  type="number"
+                  min="0"
+                  autocomplete="off"
+                />
+                <s-text-field
+                  name="tier2MinSubtotal"
+                  label="Tier 2 minimum cart value"
+                  value={tier2MinSubtotal}
+                  onChange={(e) => setTier2MinSubtotal(e.currentTarget.value)}
+                  error={actionData?.errors?.tier2MinSubtotal}
+                  type="number"
+                  min="0"
+                  autocomplete="off"
+                />
+              </s-grid>
+              {tier1Type === "DISCOUNT" ? (
+                <s-text-field
+                  name="tier1DiscountPercentage"
+                  label="Tier 1 discount %"
+                  value={tier1DiscountPercentage}
+                  onChange={(e) => setTier1DiscountPercentage(e.currentTarget.value)}
+                  error={actionData?.errors?.tier1DiscountPercentage}
+                  type="number"
+                  min="1"
+                  max="100"
+                  autocomplete="off"
+                />
+              ) : (
+                <s-box padding="small" borderWidth="base" borderRadius="base" background="subdued">
+                  <s-text tone="neutral">
+                    Tier 1 will apply free shipping automatically once the threshold is reached.
+                  </s-text>
+                </s-box>
+              )}
+              <s-text-field
+                name="tier2DiscountPercentage"
+                label="Tier 2 discount %"
+                value={tier2DiscountPercentage}
+                onChange={(e) => setTier2DiscountPercentage(e.currentTarget.value)}
+                error={actionData?.errors?.tier2DiscountPercentage}
+                autocomplete="off"
+                type="number"
+                min="1"
+                max="100"
+              />
+              <s-text-field
+                name="tier1Message"
+                label="Tier 1 customer message"
+                value={tier1Message}
+                onChange={(e) => setTier1Message(e.currentTarget.value)}
+                autocomplete="off"
+              />
+              <s-text-field
+                name="tier2Message"
+                label="Tier 2 customer message"
+                value={tier2Message}
+                onChange={(e) => setTier2Message(e.currentTarget.value)}
+                autocomplete="off"
+              />
+              <SubHeading>Widget UI settings (live)</SubHeading>
+              <s-grid gridTemplateColumns="1fr 1fr" gap="base">
+                <s-text-field
+                  name="uiWidgetTitle"
+                  label="Widget title"
+                  value={uiWidgetTitle}
+                  onChange={(e) => setUiWidgetTitle(e.currentTarget.value)}
+                  autocomplete="off"
+                />
+                <s-select
+                  name="uiShowProgressBar"
+                  label="Top progress bar"
+                  value={uiShowProgressBar}
+                  onChange={(e) => setUiShowProgressBar(e.currentTarget.value)}
+                >
+                  <s-option value="true">Show</s-option>
+                  <s-option value="false">Hide</s-option>
+                </s-select>
+              </s-grid>
+              <s-text-field
+                name="uiWidgetSubtitle"
+                label="Widget subtitle"
+                value={uiWidgetSubtitle}
+                onChange={(e) => setUiWidgetSubtitle(e.currentTarget.value)}
+                autocomplete="off"
+              />
+              <s-grid gridTemplateColumns="1fr 1fr 1fr 1fr" gap="base">
+                <s-text-field
+                  name="uiTier1Label"
+                  label="Tier 1 label"
+                  value={uiTier1Label}
+                  onChange={(e) => setUiTier1Label(e.currentTarget.value)}
+                  autocomplete="off"
+                />
+                <s-text-field
+                  name="uiTier1Icon"
+                  label="Tier 1 icon"
+                  value={uiTier1Icon}
+                  onChange={(e) => setUiTier1Icon(e.currentTarget.value)}
+                  autocomplete="off"
+                />
+                <s-text-field
+                  name="uiTier2Label"
+                  label="Tier 2 label"
+                  value={uiTier2Label}
+                  onChange={(e) => setUiTier2Label(e.currentTarget.value)}
+                  autocomplete="off"
+                />
+                <s-text-field
+                  name="uiTier2Icon"
+                  label="Tier 2 icon"
+                  value={uiTier2Icon}
+                  onChange={(e) => setUiTier2Icon(e.currentTarget.value)}
+                  autocomplete="off"
+                />
+              </s-grid>
+              <s-grid gridTemplateColumns="1fr 1fr 1fr" gap="base">
+                <s-text-field
+                  name="uiPrimaryColor"
+                  label="Primary color"
+                  value={uiPrimaryColor}
+                  onChange={(e) => setUiPrimaryColor(e.currentTarget.value)}
+                  autocomplete="off"
+                />
+                <s-text-field
+                  name="uiTrackColor"
+                  label="Track color"
+                  value={uiTrackColor}
+                  onChange={(e) => setUiTrackColor(e.currentTarget.value)}
+                  autocomplete="off"
+                />
+                <s-text-field
+                  name="uiBorderColor"
+                  label="Border color"
+                  value={uiBorderColor}
+                  onChange={(e) => setUiBorderColor(e.currentTarget.value)}
+                  autocomplete="off"
+                />
+              </s-grid>
+              <s-grid gridTemplateColumns="1fr 1fr 1fr 1fr" gap="base">
+                <s-text-field
+                  name="uiCardBackground"
+                  label="Card background"
+                  value={uiCardBackground}
+                  onChange={(e) => setUiCardBackground(e.currentTarget.value)}
+                  autocomplete="off"
+                />
+                <s-text-field
+                  name="uiTextColor"
+                  label="Text color"
+                  value={uiTextColor}
+                  onChange={(e) => setUiTextColor(e.currentTarget.value)}
+                  autocomplete="off"
+                />
+                <s-text-field
+                  name="uiMutedTextColor"
+                  label="Muted text color"
+                  value={uiMutedTextColor}
+                  onChange={(e) => setUiMutedTextColor(e.currentTarget.value)}
+                  autocomplete="off"
+                />
+                <s-text-field
+                  name="uiIconTextColor"
+                  label="Icon text color"
+                  value={uiIconTextColor}
+                  onChange={(e) => setUiIconTextColor(e.currentTarget.value)}
+                  autocomplete="off"
+                />
+              </s-grid>
+              <s-text-field
+                name="uiIconBackground"
+                label="Icon background"
+                value={uiIconBackground}
+                onChange={(e) => setUiIconBackground(e.currentTarget.value)}
+                autocomplete="off"
+              />
+
+              <s-box padding="base" borderWidth="base" borderRadius="base">
+                <s-stack direction="block" gap="small">
+                  <s-text type="strong">Live widget preview</s-text>
+                  <div
+                    style={{
+                      border: `1px solid ${uiBorderColor || "#d1d5db"}`,
+                      background: uiCardBackground || "#fff",
+                      borderRadius: 12,
+                      padding: 14,
+                      color: uiTextColor || "#0f172a",
+                    }}
+                  >
+                    <div style={{ fontSize: 24, fontWeight: 700 }}>{uiWidgetTitle || "Rewards progress"}</div>
+                    <div style={{ marginTop: 6, color: uiMutedTextColor || "#64748b" }}>
+                      {uiWidgetSubtitle || "Unlock rewards with cart value."}
+                    </div>
+                    {uiShowProgressBar !== "false" ? (
+                      <div
+                        style={{
+                          marginTop: 12,
+                          height: 10,
+                          borderRadius: 999,
+                          background: uiTrackColor || "#cbd5e1",
+                          overflow: "hidden",
+                        }}
+                      >
+                        <div
+                          style={{
+                            width: previewBarWidth,
+                            height: "100%",
+                            background: uiPrimaryColor || "#166534",
+                            transition: "width 200ms ease",
+                          }}
+                        />
+                      </div>
+                    ) : null}
+                    <div style={{ marginTop: 16, display: "flex", alignItems: "flex-start", gap: 20 }}>
+                      <div style={{ flex: 1, textAlign: "center" }}>
+                        <div
+                          style={{
+                            width: 42,
+                            height: 42,
+                            borderRadius: 999,
+                            margin: "0 auto",
+                            display: "grid",
+                            placeItems: "center",
+                            background: uiIconBackground || "#166534",
+                            color: uiIconTextColor || "#fff",
+                            border: `2px solid ${previewTier1Reached ? uiPrimaryColor || "#166534" : uiTrackColor || "#cbd5e1"}`,
+                          }}
+                        >
+                          {uiTier1Icon || "%"}
+                        </div>
+                        <div style={{ marginTop: 8, fontWeight: 700 }}>{uiTier1Label || "Tier 1"}</div>
+                        <div style={{ marginTop: 4, color: uiMutedTextColor || "#64748b" }}>{resolvedTier1Caption}</div>
+                        <div style={{ marginTop: 4, fontWeight: 600 }}>
+                          Min. {Number.isFinite(previewTier1Min) ? previewTier1Min : 0}
+                        </div>
+                      </div>
+                      <div style={{ flex: "0 0 80px", marginTop: 18, height: 6, borderRadius: 999, background: uiTrackColor || "#cbd5e1" }}>
+                        <div
+                          style={{
+                            width: previewTier2Reached ? "100%" : previewTier1Reached ? "50%" : "0%",
+                            height: "100%",
+                            borderRadius: 999,
+                            background: uiPrimaryColor || "#166534",
+                            transition: "width 200ms ease",
+                          }}
+                        />
+                      </div>
+                      <div style={{ flex: 1, textAlign: "center" }}>
+                        <div
+                          style={{
+                            width: 42,
+                            height: 42,
+                            borderRadius: 999,
+                            margin: "0 auto",
+                            display: "grid",
+                            placeItems: "center",
+                            background: uiIconBackground || "#166534",
+                            color: uiIconTextColor || "#fff",
+                            border: `2px solid ${previewTier2Reached ? uiPrimaryColor || "#166534" : uiTrackColor || "#cbd5e1"}`,
+                          }}
+                        >
+                          {uiTier2Icon || "🚚"}
+                        </div>
+                        <div style={{ marginTop: 8, fontWeight: 700 }}>{uiTier2Label || "Tier 2"}</div>
+                        <div style={{ marginTop: 4, color: uiMutedTextColor || "#64748b" }}>{resolvedTier2Caption}</div>
+                        <div style={{ marginTop: 4, fontWeight: 600 }}>
+                          Min. {Number.isFinite(previewTier2Min) ? previewTier2Min : 0}
+                        </div>
+                      </div>
+                    </div>
+                    <div
+                      style={{
+                        marginTop: 14,
+                        paddingTop: 10,
+                        borderTop: `1px solid ${uiBorderColor || "#d1d5db"}`,
+                        color: uiMutedTextColor || "#64748b",
+                      }}
+                    >
+                      Current subtotal: {previewSubtotalValue || 0} · Progress: {previewProgress}%
+                    </div>
+                  </div>
+                </s-stack>
+              </s-box>
+              <input type="hidden" name="discountValueType" value="PERCENTAGE" />
+              <input type="hidden" name="percentage" value={tier2DiscountPercentage} />
+              <input type="hidden" name="amountOff" value="" />
+            </SectionCard>
     </s-page>
   );
 }

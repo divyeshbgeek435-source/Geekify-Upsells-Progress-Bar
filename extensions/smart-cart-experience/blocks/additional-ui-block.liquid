@@ -1,0 +1,57 @@
+{% comment %}
+  Keep guidance in schema-side help text only.
+  Do not render editor hint banners in-page, because they visually overlap storefront preview content.
+{% endcomment %}
+
+<div
+  id="sce-extra-hook-{{ block.id }}"
+  class="sce-extra-block-hook"
+  {{ block.shopify_attributes }}
+  style="min-height: 1px;"
+></div>
+
+{{ 'additional-ui.css' | asset_url | stylesheet_tag }}
+
+<script
+  src="{{ 'additional-ui.js' | asset_url }}"
+  data-sce-extra=""
+  data-sce-extra-block-id="{{ block.id }}"
+  data-sce-extra-hook="sce-extra-hook-{{ block.id }}"
+  data-sce-extra-section-id="{{ block.settings.section_id | escape }}"
+  data-placement="{{ block.settings.placement | default: 'inline' | escape }}"
+  data-api-url="{{ shop.secure_url }}/apps/sce/additional-ui"
+  defer
+></script>
+
+{% schema %}
+{
+  "name": "Additional UI bar",
+  "target": "section",
+  "settings": [
+    {
+      "type": "paragraph",
+      "content": "Paste the Section ID from the app (Announcement UI lab). The block renders only when the ID matches."
+    },
+    {
+      "type": "paragraph",
+      "content": "Important: This block does not use Announcement bars IDs/Section IDs."
+    },
+    {
+      "type": "text",
+      "id": "section_id",
+      "label": "Section ID",
+      "info": "Required for the bar to appear. Paste the Section ID from the app (Announcement UI lab). It must match exactly (including the default marquee-… id if you use that). The ID is not shown as customer-facing text; the live bar has data-sce-marquee-section-id on its root for debugging."
+    },
+    {
+      "type": "select",
+      "id": "placement",
+      "label": "Placement",
+      "default": "inline",
+      "options": [
+        { "value": "inline", "label": "Inline (inside this section)" },
+        { "value": "sticky", "label": "Top of page (fixed)" }
+      ]
+    }
+  ]
+}
+{% endschema %}
