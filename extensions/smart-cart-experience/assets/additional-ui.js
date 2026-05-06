@@ -21,7 +21,7 @@
     .toLowerCase();
   var apiUrl = String(script.dataset.apiUrl || "").trim();
   var zIndex = Math.max(1, Number(script.dataset.zIndex || "1000") || 1000);
-  var refreshIntervalMs = 5000;
+  var refreshIntervalMs = 2000;
   var lastRenderVersion = "";
   var rotateTimer = null;
   var rotateState = { idx: 0 };
@@ -115,6 +115,7 @@
       Math.min(6, Number(cfg.marqueeSeparatorRepeat || 1) || 1),
     );
     var marqueeTrailingSeparator = cfg.marqueeTrailingSeparator !== false;
+    var marqueeFullWidth = cfg.marqueeFullWidth !== false;
 
     var root = document.createElement("div");
     root.className = "sce-extra-bar " + (placement === "sticky" ? "sce-extra-bar--sticky" : "sce-extra-bar--inline");
@@ -137,6 +138,11 @@
 
     if (displayMode === "marquee") {
       wrap.classList.add("sce-extra-bar__track-wrap--marquee");
+      if (marqueeFullWidth) {
+        root.style.width = "100%";
+      } else {
+        root.style.width = "fit-content";
+      }
       track.classList.add("sce-extra-bar__track--marquee");
       track.style.animationDuration = marqueeDurationSeconds + "s";
       track.style.animationDirection = marqueeDirection === "ltr" ? "reverse" : "normal";
@@ -223,7 +229,11 @@
       render({});
       return;
     }
-    fetch(apiUrl, { credentials: "same-origin", headers: { Accept: "application/json" } })
+    var endpoint = apiUrl;
+    if (sectionIdFilter) {
+      endpoint += (endpoint.indexOf("?") >= 0 ? "&" : "?") + "sectionId=" + encodeURIComponent(sectionIdFilter);
+    }
+    fetch(endpoint, { credentials: "same-origin", headers: { Accept: "application/json" } })
       .then(function (r) {
         return r.json().then(function (data) {
           return { status: r.status, data: data };

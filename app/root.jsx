@@ -1,4 +1,7 @@
 import { Links, Meta, Outlet, Scripts, ScrollRestoration } from "react-router";
+import adminUiStylesHref from "./styles/admin-ui.css?url";
+
+export const links = () => [{ rel: "stylesheet", href: adminUiStylesHref }];
 
 export default function App() {
   return (

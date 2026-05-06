@@ -61,41 +61,22 @@ export function cartLinesDiscountsGenerateRun(input) {
       config.thresholdTiers,
       subtotal,
     );
-    const candidates =
-      tierCandidates.length > 0
-        ? tierCandidates
-        : [
-            {
-              message: config.order.message,
-              targets: [
-                {
-                  orderSubtotal: {
-                    excludedCartLineIds: [],
-                  },
-                },
-              ],
-              value:
-                config.order.valueType === 'FIXED_AMOUNT'
-                  ? {
-                      fixedAmount: {
-                        amount: config.order.amountOff,
-                      },
-                    }
-                  : {
-                      percentage: {
-                        value: config.order.percentage,
-                      },
-                    },
-            },
-          ];
+    let orderCandidates = [];
+    if (tierCandidates.length > 1) {
+      // Shopify allows only one orderDiscountsAdd operation per run, and FIRST/MAXIMUM pick a
+      // single candidate — so combine qualified tiers into one fixed order discount.
+      orderCandidates = [mergeOrderTierCandidatesToSingleFixed(tierCandidates, subtotal)];
+    } else if (tierCandidates.length === 1) {
+      orderCandidates = tierCandidates;
+    }
 
-    if (candidates.length) {
+    if (orderCandidates.length) {
       operations.push({
         orderDiscountsAdd: {
-          candidates,
+          candidates: orderCandidates,
           selectionStrategy:
-            tierCandidates.length > 1
-              ? OrderDiscountSelectionStrategy.Maximum
+            tierCandidates.length > 0
+              ? OrderDiscountSelectionStrategy.First
               : mapOrderStrategy(config.order.selectionStrategy),
         },
       });
@@ -149,13 +130,17 @@ function parseFunctionConfig(raw) {
       tier1: {
         type: 'FREE_SHIPPING',
         minSubtotal: 500,
+        valueType: 'PERCENTAGE',
+        amountOff: 0,
         discountPercentage: 5,
         message: '5% off unlocked',
       },
       tier2: {
         minSubtotal: 1000,
-        discountPercentage: 20,
-        message: '20% off unlocked',
+        valueType: 'PERCENTAGE',
+        amountOff: 0,
+        discountPercentage: 10,
+        message: '10% off unlocked',
       },
     },
     order: {
@@ -202,6 +187,8 @@ function normalizeThresholdTiers(value, fallback) {
     tier1: {
       type: normalizeTier1Type(tier1.type, fallback.tier1.type),
       minSubtotal: normalizeAmountOff(tier1.minSubtotal, fallback.tier1.minSubtotal),
+      valueType: normalizeValueType(tier1.valueType, fallback.tier1.valueType),
+      amountOff: normalizeAmount(tier1.amountOff, fallback.tier1.amountOff ?? 0),
       discountPercentage: normalizePercentage(
         tier1.discountPercentage,
         fallback.tier1.discountPercentage,
@@ -210,6 +197,8 @@ function normalizeThresholdTiers(value, fallback) {
     },
     tier2: {
       minSubtotal: normalizeAmountOff(tier2.minSubtotal, fallback.tier2.minSubtotal),
+      valueType: normalizeValueType(tier2.valueType, fallback.tier2.valueType),
+      amountOff: normalizeAmount(tier2.amountOff, fallback.tier2.amountOff ?? 0),
       discountPercentage: normalizePercentage(
         tier2.discountPercentage,
         fallback.tier2.discountPercentage,
@@ -229,96 +218,170 @@ function normalizeTier1Type(value, fallback) {
 function normalizeRuntimeTiers(value) {
   if (!Array.isArray(value)) return [];
   return value
-    .map((tier) => ({
-      minSubtotal: normalizeAmount(tier?.minSubtotal, 0),
-      rewardType:
-        String(tier?.rewardType || '').trim().toUpperCase() === 'FREE_SHIPPING'
+    .map((tier) => {
+      const rewardRaw = String(tier?.rewardType || '').trim().toUpperCase();
+      const rewardType =
+        rewardRaw === 'FREE_SHIPPING'
           ? 'FREE_SHIPPING'
-          : 'PERCENTAGE',
-      discountPercentage: normalizePercentage(tier?.discountPercentage, 0),
-      message: String(tier?.message || ''),
-      active: tier?.active !== false,
-    }))
+          : rewardRaw === 'FIXED_AMOUNT'
+            ? 'FIXED_AMOUNT'
+            : 'PERCENTAGE';
+      const valueTypeRaw = String(tier?.valueType || '').trim().toUpperCase();
+      const valueType =
+        valueTypeRaw === 'FIXED_AMOUNT' || rewardType === 'FIXED_AMOUNT'
+          ? 'FIXED_AMOUNT'
+          : 'PERCENTAGE';
+      const pctRaw = tier?.discountPercentage ?? tier?.discountPercent;
+      const pct = Number(pctRaw);
+      const discountPercentage =
+        Number.isFinite(pct) && pct >= 0 && pct <= 100 ? pct : 0;
+      const amtRaw = tier?.amountOff ?? (rewardType === 'FIXED_AMOUNT' ? pctRaw : 0);
+      const amountOff = normalizeAmount(amtRaw, 0);
+      return {
+        name: String(tier?.name || '').trim(),
+        minSubtotal: normalizeAmount(tier?.minSubtotal, 0),
+        rewardType,
+        valueType,
+        discountPercentage,
+        amountOff,
+        message: String(tier?.message || ''),
+        active: tier?.active !== false,
+      };
+    })
     .filter((tier) => tier.active)
     .sort((a, b) => a.minSubtotal - b.minSubtotal);
 }
 
+function runtimeTierAppliesToOrderSubtotal(tier) {
+  if (String(tier.rewardType || '').toUpperCase() === 'FREE_SHIPPING') return false;
+  if (String(tier.valueType || '').toUpperCase() === 'FIXED_AMOUNT') {
+    return Number(tier.amountOff || 0) > 0;
+  }
+  return Number(tier.discountPercentage || 0) > 0;
+}
+
+function roundMoney(amount) {
+  const n = Number(amount);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.round(n * 100) / 100;
+}
+
+/**
+ * Combine several tier order candidates into one fixed-amount discount so Shopify applies
+ * the full benefit (see cartLinesDiscountsGenerateRun — single orderDiscountsAdd operation).
+ */
+function mergeOrderTierCandidatesToSingleFixed(candidates, subtotal) {
+  let totalOff = 0;
+  const labels = [];
+  for (const c of candidates) {
+    if (c.value?.percentage) {
+      const p = Number(c.value.percentage.value || 0);
+      if (p > 0) {
+        totalOff += (Number(subtotal) * p) / 100;
+        labels.push(String(c.message || `${p}%`).trim());
+      }
+    } else if (c.value?.fixedAmount) {
+      const a = Number(c.value.fixedAmount.amount || 0);
+      if (a > 0) {
+        totalOff += a;
+        labels.push(String(c.message || `${a}`).trim());
+      }
+    }
+  }
+  const capped = Math.min(roundMoney(totalOff), roundMoney(subtotal));
+  return {
+    message: labels.filter(Boolean).join(' + ') || 'Tier discounts',
+    targets:
+      candidates[0]?.targets || [
+        {orderSubtotal: {excludedCartLineIds: []}},
+      ],
+    value: {
+      fixedAmount: {
+        amount: String(capped),
+      },
+    },
+  };
+}
+
+function orderDiscountCandidateFromTierFields({
+  displayMessage,
+  valueType,
+  discountPercentage,
+  amountOff,
+}) {
+  const targets = [
+    {
+      orderSubtotal: {
+        excludedCartLineIds: [],
+      },
+    },
+  ];
+  const isFixed = String(valueType || '').toUpperCase() === 'FIXED_AMOUNT';
+  if (isFixed && Number(amountOff) > 0) {
+    return {
+      message: displayMessage,
+      targets,
+      value: {
+        fixedAmount: {
+          amount: String(amountOff),
+        },
+      },
+    };
+  }
+  if (!isFixed && Number(discountPercentage) > 0) {
+    return {
+      message: displayMessage,
+      targets,
+      value: {
+        percentage: {
+          value: Number(discountPercentage),
+        },
+      },
+    };
+  }
+  return null;
+}
+
 function resolveTierOrderCandidates(runtimeTiers, thresholdTiers, subtotal) {
   if (Array.isArray(runtimeTiers) && runtimeTiers.length) {
-    let matchedTier = null;
+    const out = [];
     for (const tier of runtimeTiers) {
       const qualifies = subtotal >= Number(tier.minSubtotal || 0);
-      const isDiscountTier =
-        String(tier.rewardType || '').toUpperCase() === 'PERCENTAGE' &&
-        Number(tier.discountPercentage || 0) > 0;
-      if (qualifies && isDiscountTier) matchedTier = tier;
+      if (!qualifies || !runtimeTierAppliesToOrderSubtotal(tier)) continue;
+      const displayMessage =
+        tier.name || tier.message || 'Tier discount unlocked';
+      const candidate = orderDiscountCandidateFromTierFields({
+        displayMessage: String(displayMessage),
+        valueType: tier.valueType,
+        discountPercentage: tier.discountPercentage,
+        amountOff: tier.amountOff,
+      });
+      if (candidate) out.push(candidate);
     }
-    if (matchedTier) {
-      return [
-        {
-          message: String(matchedTier.message || 'Tier discount unlocked'),
-          targets: [
-            {
-              orderSubtotal: {
-                excludedCartLineIds: [],
-              },
-            },
-          ],
-          value: {
-            percentage: {
-              value: Number(matchedTier.discountPercentage || 0),
-            },
-          },
-        },
-      ];
-    }
-    return [];
+    return out;
   }
 
   if (!thresholdTiers || typeof thresholdTiers !== 'object') return [];
   const result = [];
   const tier1 = thresholdTiers.tier1;
   const tier2 = thresholdTiers.tier2;
-  if (
-    tier1?.type === 'DISCOUNT' &&
-    subtotal >= Number(tier1.minSubtotal || 0) &&
-    Number(tier1.discountPercentage || 0) > 0
-  ) {
-    result.push({
-      message: String(tier1.message || 'Tier 1 discount unlocked'),
-      targets: [
-        {
-          orderSubtotal: {
-            excludedCartLineIds: [],
-          },
-        },
-      ],
-      value: {
-        percentage: {
-          value: Number(tier1.discountPercentage || 0),
-        },
-      },
+  if (tier1?.type === 'DISCOUNT' && subtotal >= Number(tier1.minSubtotal || 0)) {
+    const candidate = orderDiscountCandidateFromTierFields({
+      displayMessage: String(tier1.message || 'Tier 1 discount unlocked'),
+      valueType: tier1.valueType,
+      discountPercentage: tier1.discountPercentage,
+      amountOff: tier1.amountOff,
     });
+    if (candidate) result.push(candidate);
   }
-  if (
-    subtotal >= Number(tier2?.minSubtotal || 0) &&
-    Number(tier2?.discountPercentage || 0) > 0
-  ) {
-    result.push({
-      message: String(tier2.message || 'Tier 2 discount unlocked'),
-      targets: [
-        {
-          orderSubtotal: {
-            excludedCartLineIds: [],
-          },
-        },
-      ],
-      value: {
-        percentage: {
-          value: Number(tier2.discountPercentage || 0),
-        },
-      },
+  if (subtotal >= Number(tier2?.minSubtotal || 0)) {
+    const candidate = orderDiscountCandidateFromTierFields({
+      displayMessage: String(tier2.message || 'Tier 2 discount unlocked'),
+      valueType: tier2.valueType,
+      discountPercentage: tier2.discountPercentage,
+      amountOff: tier2.amountOff,
     });
+    if (candidate) result.push(candidate);
   }
   return result;
 }

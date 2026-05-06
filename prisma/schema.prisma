@@ -63,9 +63,23 @@ model AnnouncementBar {
   @@index([shop])
 }
 
+/// Popup email sign-ups recorded from the storefront (app proxy POST).
+model PopupSignup {
+  id            String   @id @default(cuid())
+  shop          String
+  popupDesignId String
+  email         String
+  firstName     String   @default("")
+  createdAt     DateTime @default(now())
+
+  @@unique([shop, popupDesignId, email])
+  @@index([shop, popupDesignId])
+}
+
 model ThresholdTier {
   id                String   @id @default(cuid())
   shop              String
+  discountName      String   @default("Default Discount")
   name              String
   minSubtotal       Float
   rewardType        String
@@ -73,8 +87,55 @@ model ThresholdTier {
   message           String   @default("")
   position          Int      @default(0)
   active            Boolean  @default(true)
+  usageCount        Int      @default(0)
+  scheduleStartAt   DateTime?
+  scheduleEndAt     DateTime?
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
-  @@index([shop, active, position])
+  @@index([shop, discountName, active, position])
+}
+
+model TierDiscount {
+  id              String   @id @default(cuid())
+  shop            String
+  name            String
+  active          Boolean  @default(true)
+  scheduleStartAt DateTime?
+  scheduleEndAt   DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([shop, name])
+  @@index([shop, active])
+}
+
+model TierWidgetSettings {
+  id                  String   @id @default(cuid())
+  shop                String   @unique
+  sequentialMsg0      String   @default("Unlock Tier 1 to apply your cart discount. Then unlock Tier 2 for free shipping.")
+  sequentialMsg1      String   @default("Apply discount to unlock free shipping")
+  sequentialMsg2      String   @default("Free shipping unlocked")
+  sequentialHintZero  String   @default("Progress: 0% — unlock Tier 1 to start.")
+  sequentialHintMid   String   @default("Progress: 50% — unlock Tier 2 for free shipping.")
+  tier1Icon           String   @default("%")
+  tier2Icon           String   @default("🚚")
+  subtotalLabel       String   @default("Current subtotal")
+  estimatedShippingLabel String @default("Estimated shipping")
+  widgetBackgroundColor String @default("#ffffff")
+  widgetTextColor     String   @default("#111827")
+  widgetBorderColor   String   @default("#d1d5db")
+  widgetUseCustomColors Boolean @default(false)
+  tier1LabelText      String   @default("Discount")
+  tier2LabelText      String   @default("Free shipping")
+  minAmountPrefixText String   @default("Min.")
+  showTierIcons       Boolean  @default(true)
+  showTierLabels      Boolean  @default(true)
+  showTierMinimums    Boolean  @default(true)
+  widgetDynamicConfigJson String @default("{}")
+  selectorTargets     String   @default(".product__info-container, .cart-drawer__content, .drawer__inner, form[action='/cart'], .cart__blocks")
+  nameTargetSelectors String   @default(".cart-drawer__content, .drawer__inner, .drawer__header, form[action='/cart'], .cart__blocks")
+  sequentialTitle     String   @default("Rewards progress")
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 }

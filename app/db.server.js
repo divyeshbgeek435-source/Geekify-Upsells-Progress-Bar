@@ -1,6 +1,12 @@
-import { PrismaClient, Prisma } from "@prisma/client";
+import { PrismaClient, Prisma } from "@prisma/client/index.js";
 
 const globalForPrisma = globalThis;
+const REQUIRED_DELEGATES = [
+  "session",
+  "cartAccessLog",
+  "announcementBar",
+  "thresholdTier",
+];
 
 /** Busts the dev singleton when `prisma generate` adds/removes fields (cached client would otherwise stay on an old DMMF). */
 function prismaSchemaCacheSignature() {
@@ -10,6 +16,7 @@ function prismaSchemaCacheSignature() {
       session: Prisma.SessionScalarFieldEnum ?? null,
       cartAccessLog: Prisma.CartAccessLogScalarFieldEnum ?? null,
       thresholdTier: Prisma.ThresholdTierScalarFieldEnum ?? null,
+      tierWidgetSettings: Prisma.TierWidgetSettingsScalarFieldEnum ?? null,
     });
     let h = 0;
     for (let i = 0; i < sig.length; i++) {
@@ -29,12 +36,13 @@ const PRISMA_KEY = `__cartShopifyPrisma_${prismaSchemaCacheSignature()}`;
  * still constructs but omits new delegates — we must not cache that instance.
  */
 function clientIsComplete(client) {
-  return (
-    client &&
-    typeof client.session?.findMany === "function" &&
-    typeof client.cartAccessLog?.findMany === "function" &&
-    typeof client.announcementBar?.findMany === "function" &&
-    typeof client.thresholdTier?.findMany === "function"
+  return getMissingDelegates(client).length === 0;
+}
+
+function getMissingDelegates(client) {
+  if (!client) return REQUIRED_DELEGATES.slice();
+  return REQUIRED_DELEGATES.filter(
+    (delegate) => typeof client?.[delegate]?.findMany !== "function",
   );
 }
 
@@ -51,9 +59,9 @@ function getPrisma() {
     client = makePrisma();
     if (!clientIsComplete(client)) {
       delete globalForPrisma[PRISMA_KEY];
+      const missing = getMissingDelegates(client);
       throw new Error(
-        "Prisma Client is missing required models (session, cartAccessLog, or announcementBar). " +
-          "ThresholdTier delegate is also required for tiered discounts. " +
+        `Prisma Client is missing required delegates: ${missing.join(", ")}. ` +
           "Run `npx prisma generate` in the project root and restart the dev server. " +
           "If you already did that, Vite may have loaded Prisma’s browser stub: keep `ssr.external: [\"@prisma/client\"]` in vite.config.js (see project vite.config.js).",
       );

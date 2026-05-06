@@ -1,6 +1,7 @@
 {% comment %}
-  Loads the popup design saved in the app (Popup design page). Paste the Popup design ID from the app;
-  the modal appears on the storefront only when this ID matches the saved configuration.
+  Section block: only loads on templates where this section is included (often the homepage).
+  For popups on product, collection, or cart pages, enable **Popup design (site-wide)** under Theme → App embeds
+  with the same Design ID, or add this section to those JSON templates.
 {% endcomment %}
 
 <div
@@ -29,7 +30,7 @@
   "settings": [
     {
       "type": "paragraph",
-      "content": "Create popups in the app (Popup design). Paste the Popup design ID for the popup this block should load. You can add multiple blocks for different popups. Leave the ID empty only if you have exactly one saved popup (legacy)."
+      "content": "Create popups in the app (Popup design). Paste the Popup design ID. This block only runs where the section exists—for site-wide or page targeting (e.g. products), also enable the app embed “Popup design (site-wide)” under Theme → App embeds."
     },
     {
       "type": "text",

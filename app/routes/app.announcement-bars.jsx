@@ -2501,69 +2501,81 @@ const ANNOUNCE_EMBED_HANDLE = "announcement-bar-embed";
 const ANNOUNCE_BLOCK_HANDLE = "announcement-bar-block";
 const ANNOUNCEMENT_STYLE_PRESETS = [
   {
-    id: "running",
-    title: "Running Bar",
+    id: "scrolling",
+    title: "Scrolling bar",
+    description: "Full-width marquee with continuous motion.",
     barType: "marquee",
-    messages: ["Black Friday Sale Is Live! Enjoy Flat 20% Off On All Products."],
+    messages: ["🔥 HOT SALE"],
     config: {
-      backgroundColor: "#1e3a8a",
+      backgroundColor: "#000000",
       textColor: "#ffffff",
-      borderColor: "#1e40af",
-      borderWidthPx: 1,
-      fontWeight: "600",
-      textAlign: "left",
-      paddingYpx: 12,
-      paddingXpx: 20,
-      borderRadiusPx: 8,
-      shadow: "subtle",
-      marqueeSpeedSeconds: 20,
-      linkUnderline: false,
-      dismissible: false,
-    },
-  },
-  {
-    id: "fixed",
-    title: "Fixed / Sticky Bar",
-    barType: "sticky",
-    messages: ["Flash Save Alert! Everything Must Go - Save Before It Ends."],
-    config: {
-      backgroundColor: "#111827",
-      textColor: "#f9fafb",
-      borderColor: "#4b5563",
-      borderWidthPx: 1,
+      borderColor: "transparent",
+      borderWidthPx: 0,
       fontWeight: "700",
-      textAlign: "left",
+      fontFamily: "system",
+      textAlign: "center",
       paddingYpx: 12,
-      paddingXpx: 20,
-      borderRadiusPx: 8,
-      shadow: "medium",
+      paddingXpx: 18,
+      borderRadiusPx: 0,
+      shadow: "none",
+      marqueeSpeedSeconds: 18,
       linkUnderline: false,
       dismissible: false,
+      ctaLabel: "",
+      linkUrl: "",
     },
   },
   {
-    id: "carousel",
-    title: "Carousel Style Bar",
+    id: "rotating",
+    title: "Rotating bar",
+    description: "Soft gradient with multiple sliding messages.",
     barType: "rotating",
     messages: [
-      "Prices Slashed! Don't Miss Out On Major Savings.",
-      "Limited-time deals updated every hour.",
-      "Shop now and unlock exclusive cart rewards.",
+      "For a limited time, enjoy a 20% discount on all our products!",
+      "Free shipping on qualifying orders this week.",
     ],
     config: {
-      backgroundColor: "#0f172a",
-      textColor: "#e5e7eb",
-      borderColor: "#0b3a45",
-      borderWidthPx: 1,
+      backgroundColor: "linear-gradient(90deg, #00E5FF 0%, #B39DDB 100%)",
+      textColor: "#ffffff",
+      borderColor: "transparent",
+      borderWidthPx: 0,
       fontWeight: "600",
+      fontFamily: "system",
+      textAlign: "center",
+      paddingYpx: 14,
+      paddingXpx: 20,
+      borderRadiusPx: 0,
+      shadow: "subtle",
+      rotateIntervalMs: 5000,
+      linkUnderline: false,
+      dismissible: false,
+      ctaLabel: "",
+      linkUrl: "",
+    },
+  },
+  {
+    id: "simple",
+    title: "Simple bar + CTA",
+    description: "Minimal bar with a coral call-to-action button.",
+    barType: "sticky",
+    messages: ["For a limited time, enjoy a 20% discount on all our products!"],
+    config: {
+      backgroundColor: "#2C2E43",
+      textColor: "#ffffff",
+      borderColor: "transparent",
+      borderWidthPx: 0,
+      fontWeight: "500",
+      fontFamily: "system",
       textAlign: "left",
       paddingYpx: 12,
       paddingXpx: 20,
-      borderRadiusPx: 8,
-      shadow: "subtle",
-      rotateIntervalMs: 3000,
+      borderRadiusPx: 0,
+      shadow: "none",
+      linkUrl: "/collections/all",
       linkUnderline: false,
       dismissible: false,
+      ctaLabel: "Shop now!",
+      ctaBackgroundColor: "#EF5350",
     },
   },
 ];
@@ -2583,8 +2595,12 @@ function fontStackCss(family) {
 }
 
 function previewBarStyle(cfg) {
+  const bg = String(cfg.backgroundColor ?? "").trim();
+  const useCssBackground = /gradient\s*\(/i.test(bg) || /^url\s*\(/i.test(bg);
   return {
-    backgroundColor: cfg.backgroundColor,
+    ...(useCssBackground
+      ? { background: bg, backgroundColor: "transparent" }
+      : { backgroundColor: bg }),
     color: cfg.textColor,
     borderStyle: cfg.borderWidthPx > 0 ? "solid" : "none",
     borderColor: cfg.borderWidthPx > 0 ? cfg.borderColor : "transparent",
@@ -2623,6 +2639,678 @@ function isValidHex(v) {
   return re.test(String(v).trim());
 }
 
+function isCssBackgroundPaint(value) {
+  const s = String(value || "").trim().toLowerCase();
+  return (
+    s.startsWith("linear-gradient") ||
+    s.startsWith("radial-gradient") ||
+    s.startsWith("url(")
+  );
+}
+
+function PresetThumbnail({ preset }) {
+  const cfg = useMemo(
+    () => ({
+      ...defaultConfig(),
+      ...preset.config,
+      messages: [...preset.messages],
+    }),
+    [preset],
+  );
+  const style = previewBarStyle(cfg);
+  const sample = (cfg.messages[0] || "Preview").slice(0, 48);
+  const thumbBase = {
+    ...style,
+    fontSize: 11,
+    padding: "8px 10px",
+    minHeight: 42,
+    borderRadius: 8,
+    width: "100%",
+    boxSizing: "border-box",
+    overflow: "hidden",
+  };
+
+  if (preset.barType === "marquee") {
+    return (
+      <div
+        style={{
+          borderRadius: 10,
+          overflow: "hidden",
+          border: "1px solid rgba(15, 23, 42, 0.1)",
+          background: "#fff",
+        }}
+      >
+        <style>{`
+          @keyframes ab-thumb-marquee {
+            from { transform: translateX(0); }
+            to { transform: translateX(-50%); }
+          }
+        `}</style>
+        <div style={{ ...thumbBase, display: "flex", alignItems: "center" }}>
+          <div
+            style={{
+              display: "inline-flex",
+              whiteSpace: "nowrap",
+              animation: "ab-thumb-marquee 5s linear infinite",
+            }}
+          >
+            <span>{sample}</span>
+            <span style={{ margin: "0 0.5em", opacity: 0.5 }}>·</span>
+            <span>{sample}</span>
+            <span style={{ margin: "0 0.5em", opacity: 0.5 }}>·</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (preset.barType === "rotating") {
+    return (
+      <div
+        style={{
+          borderRadius: 10,
+          overflow: "hidden",
+          border: "1px solid rgba(15, 23, 42, 0.1)",
+          background: "#fff",
+        }}
+      >
+        <div
+          style={{
+            ...thumbBase,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 6,
+            textAlign: "center",
+          }}
+        >
+          <span style={{ opacity: 0.65, fontSize: 14 }}>‹</span>
+          <span style={{ flex: 1, minWidth: 0, lineHeight: 1.25 }}>{sample}</span>
+          <span style={{ opacity: 0.65, fontSize: 14 }}>›</span>
+        </div>
+      </div>
+    );
+  }
+
+  const cta = String(cfg.ctaLabel || "").trim();
+  return (
+    <div
+      style={{
+        borderRadius: 10,
+        overflow: "hidden",
+        border: "1px solid rgba(15, 23, 42, 0.1)",
+        background: "#fff",
+      }}
+    >
+      <div
+        style={{
+          ...thumbBase,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
+          flexWrap: "wrap",
+        }}
+      >
+        <span style={{ flex: "1 1 120px", minWidth: 0, lineHeight: 1.25, textAlign: "left" }}>
+          {sample}
+        </span>
+        {cta && cfg.linkUrl ? (
+          <span
+            style={{
+              flex: "0 0 auto",
+              backgroundColor: cfg.ctaBackgroundColor || "#EF5350",
+              color: "#fff",
+              fontWeight: 600,
+              fontSize: 10,
+              padding: "4px 10px",
+              borderRadius: 5,
+            }}
+          >
+            {cta}
+          </span>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function DesignPickerModal({ open, onClose, onPick, presets }) {
+  const dialogRef = useRef(null);
+
+  useEffect(() => {
+    const el = dialogRef.current;
+    if (!el) return undefined;
+    if (open) {
+      if (!el.open) el.showModal();
+    } else if (el.open) {
+      el.close();
+    }
+    return undefined;
+  }, [open]);
+
+  return (
+    <dialog
+      ref={dialogRef}
+      className="ab-design-dialog"
+      aria-labelledby="ab-design-dialog-title"
+      onClose={onClose}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="ab-design-dialog__panel" onClick={(e) => e.stopPropagation()}>
+        <div className="ab-design-dialog__head">
+          <div>
+            <h2 id="ab-design-dialog-title" className="ab-design-dialog__title">
+              Choose a base design
+            </h2>
+            <p className="ab-design-dialog__sub">
+              Pick a starting point. You can fine-tune behavior, copy, and colors in the panels
+              below.
+            </p>
+          </div>
+          <button type="button" className="ab-design-dialog__close" onClick={onClose} aria-label="Close">
+            ×
+          </button>
+        </div>
+        <div className="ab-design-dialog__grid">
+          {presets.map((preset) => (
+            <button
+              key={preset.id}
+              type="button"
+              className="ab-design-dialog__card"
+              onClick={() => onPick(preset.id)}
+            >
+              <PresetThumbnail preset={preset} />
+              <span className="ab-design-dialog__card-title">{preset.title}</span>
+              <span className="ab-design-dialog__card-desc">{preset.description}</span>
+            </button>
+          ))}
+        </div>
+        {/* <div className="ab-design-dialog__footer">
+          <button type="button" className="ab-design-dialog__skip" onClick={onClose}>
+            Skip — configure from scratch
+          </button>
+        </div> */}
+      </div>
+    </dialog>
+  );
+}
+
+function DeleteConfirmModal({ open, onClose, onConfirm, barName }) {
+  const dialogRef = useRef(null);
+
+  useEffect(() => {
+    const el = dialogRef.current;
+    if (!el) return undefined;
+    if (open) {
+      if (!el.open) el.showModal();
+    } else if (el.open) {
+      el.close();
+    }
+    return undefined;
+  }, [open]);
+
+  return (
+    <dialog
+      ref={dialogRef}
+      className="ab-design-dialog"
+      aria-labelledby="ab-delete-dialog-title"
+      onClose={onClose}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="ab-design-dialog__panel" onClick={(e) => e.stopPropagation()}>
+        <div className="ab-design-dialog__head">
+          <div>
+            <h2 id="ab-delete-dialog-title" className="ab-design-dialog__title">
+              Delete announcement bar?
+            </h2>
+            <p className="ab-design-dialog__sub">
+              {barName ? `This will permanently delete "${barName}".` : "This action cannot be undone."}
+            </p>
+          </div>
+          <button type="button" className="ab-design-dialog__close" onClick={onClose} aria-label="Close">
+            ×
+          </button>
+        </div>
+        <div className="ab-design-dialog__footer">
+          <s-stack direction="inline" gap="small">
+            <s-button type="button" variant="secondary" onClick={onClose}>
+              Cancel
+            </s-button>
+            <s-button type="button" variant="primary" tone="critical" onClick={onConfirm}>
+              Delete
+            </s-button>
+          </s-stack>
+        </div>
+      </div>
+    </dialog>
+  );
+}
+
+function AnnouncementCreateModal({
+  open,
+  onClose,
+  onSubmit,
+  onDelete,
+  isEditing,
+  activeTab,
+  setActiveTab,
+  showLinksTab,
+  name,
+  setName,
+  barType,
+  setBarType,
+  sectionHtmlId,
+  setSectionHtmlId,
+  config,
+  setConfig,
+  customHtml,
+  setCustomHtml,
+  customLiquid,
+  setCustomLiquid,
+  customCss,
+  setCustomCss,
+  shop,
+}) {
+  const dialogRef = useRef(null);
+
+  useEffect(() => {
+    const el = dialogRef.current;
+    if (!el) return undefined;
+    if (open) {
+      if (!el.open) el.showModal();
+    } else if (el.open) {
+      el.close();
+    }
+    return undefined;
+  }, [open]);
+
+  return (
+    <dialog
+      ref={dialogRef}
+      className="ab-design-dialog"
+      aria-labelledby="ab-create-dialog-title"
+      onClose={onClose}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div className="ab-design-dialog__panel" onClick={(e) => e.stopPropagation()}>
+        <div className="ab-design-dialog__head">
+          <div>
+            <h2 id="ab-create-dialog-title" className="ab-design-dialog__title">
+              {isEditing ? "Update announcement bar" : "Create announcement bar"}
+            </h2>
+            <p className="ab-design-dialog__sub">
+              Customize the selected template using tabs with a live storefront preview.
+            </p>
+          </div>
+          <button type="button" className="ab-design-dialog__close" onClick={onClose} aria-label="Close">
+            ×
+          </button>
+        </div>
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            padding: "12px 22px",
+            borderBottom: "1px solid rgba(15, 23, 42, 0.06)",
+          }}
+        >
+          <s-button
+            type="button"
+            variant={activeTab === "messages" ? "primary" : "secondary"}
+            onClick={() => setActiveTab("messages")}
+          >
+            Messages
+          </s-button>
+          <s-button
+            type="button"
+            variant={activeTab === "look" ? "primary" : "secondary"}
+            onClick={() => setActiveTab("look")}
+          >
+            Look & Layout
+          </s-button>
+          {showLinksTab ? (
+            <s-button
+              type="button"
+              variant={activeTab === "links" ? "primary" : "secondary"}
+              onClick={() => setActiveTab("links")}
+            >
+              Links, CTA & Code
+            </s-button>
+          ) : null}
+        </div>
+        <div className="ab-builder-grid" style={{ padding: "16px 22px", overflowY: "auto", flex: 1, minHeight: 0 }}>
+          <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
+            <s-stack direction="block" gap="base">
+              <s-text-field
+                label="Internal name"
+                value={name}
+                onChange={(e) => setName(e.currentTarget.value)}
+                autocomplete="off"
+                required
+              />
+              <s-text-field
+                label="Section HTML ID"
+                value={sectionHtmlId}
+                details="Auto-generated ID (read-only)."
+                autocomplete="off"
+                readonly
+              />
+
+              {activeTab === "messages" ? (
+                <>
+                  <div className="ab-behavior-grid">
+                    <button
+                      type="button"
+                      className={"ab-behavior-tile" + (barType === "sticky" ? " ab-behavior-tile--on" : "")}
+                      onClick={() => setBarType("sticky")}
+                    >
+                      <span className="ab-behavior-tile__k">Pinned</span>
+                      <span className="ab-behavior-tile__t">Sticky</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={"ab-behavior-tile" + (barType === "marquee" ? " ab-behavior-tile--on" : "")}
+                      onClick={() => setBarType("marquee")}
+                    >
+                      <span className="ab-behavior-tile__k">Motion</span>
+                      <span className="ab-behavior-tile__t">Scrolling</span>
+                    </button>
+                    <button
+                      type="button"
+                      className={"ab-behavior-tile" + (barType === "rotating" ? " ab-behavior-tile--on" : "")}
+                      onClick={() => setBarType("rotating")}
+                    >
+                      <span className="ab-behavior-tile__k">Rotate</span>
+                      <span className="ab-behavior-tile__t">Slides</span>
+                    </button>
+                  </div>
+                  {barType === "marquee" ? (
+                    <s-text-field
+                      label="Marquee duration (seconds)"
+                      type="number"
+                      min={4}
+                      max={120}
+                      value={String(config.marqueeSpeedSeconds)}
+                      onChange={(e) =>
+                        setConfig((c) => ({
+                          ...c,
+                          marqueeSpeedSeconds: Math.max(4, Number(e.target?.value) || c.marqueeSpeedSeconds),
+                        }))
+                      }
+                    />
+                  ) : null}
+                  {barType === "rotating" ? (
+                    <s-text-field
+                      label="Rotate every (ms)"
+                      type="number"
+                      min={1500}
+                      max={60000}
+                      step={500}
+                      value={String(config.rotateIntervalMs)}
+                      onChange={(e) =>
+                        setConfig((c) => ({
+                          ...c,
+                          rotateIntervalMs: Math.max(1500, Number(e.target?.value) || c.rotateIntervalMs),
+                        }))
+                      }
+                    />
+                  ) : null}
+                  <s-checkbox
+                    label="Dismissible (shopper can close)"
+                    checked={config.dismissible}
+                    onChange={(e) =>
+                      setConfig((c) => ({ ...c, dismissible: e.target?.checked ?? false }))
+                    }
+                  />
+                  {config.messages.map((msg, i) => (
+                    <s-stack key={i} direction="inline" gap="small" alignItems="end">
+                      <div style={{ flex: 1 }}>
+                        <s-text-field
+                          id={`ab-message-${i}`}
+                          label={config.messages.length > 1 ? `Message ${i + 1}` : "Message"}
+                          value={msg}
+                          onChange={(e) =>
+                            setConfig((c) => {
+                              const messages = [...c.messages];
+                              messages[i] = e.currentTarget.value;
+                              return { ...c, messages };
+                            })
+                          }
+                        />
+                      </div>
+                      <s-button
+                        type="button"
+                        variant="tertiary"
+                        onClick={() => {
+                          const el = document.getElementById(`ab-message-${i}`);
+                          if (el && typeof el.focus === "function") el.focus();
+                        }}
+                      >
+                        Edit
+                      </s-button>
+                      <s-button
+                        type="button"
+                        variant="tertiary"
+                        tone="critical"
+                        onClick={() =>
+                          setConfig((c) => {
+                            const messages = c.messages.filter((_, idx) => idx !== i);
+                            return { ...c, messages: messages.length ? messages : [""] };
+                          })
+                        }
+                      >
+                        Delete
+                      </s-button>
+                    </s-stack>
+                  ))}
+                  <s-stack direction="inline" gap="small">
+                    <s-button
+                      type="button"
+                      variant="secondary"
+                      onClick={() => setConfig((c) => ({ ...c, messages: [...c.messages, ""] }))}
+                    >
+                      Add message
+                    </s-button>
+                  </s-stack>
+                </>
+              ) : null}
+
+              {activeTab === "look" ? (
+                <>
+                  <ColorPickerField
+                    label="Background"
+                    value={config.backgroundColor}
+                    onChange={(v) => setConfig((c) => ({ ...c, backgroundColor: v }))}
+                  />
+                  <ColorPickerField
+                    label="Text"
+                    value={config.textColor}
+                    onChange={(v) => setConfig((c) => ({ ...c, textColor: v }))}
+                  />
+                  <ColorPickerField
+                    label="Border"
+                    value={config.borderColor}
+                    onChange={(v) => setConfig((c) => ({ ...c, borderColor: v }))}
+                  />
+                  <s-grid gridTemplateColumns="1fr 1fr" gap="base">
+                    <s-text-field
+                      label="Border width (px)"
+                      type="number"
+                      min={0}
+                      max={16}
+                      value={String(config.borderWidthPx)}
+                      onChange={(e) =>
+                        setConfig((c) => ({ ...c, borderWidthPx: Math.max(0, Number(e.target?.value) || 0) }))
+                      }
+                    />
+                    <s-text-field
+                      label="Font size (px)"
+                      type="number"
+                      min={10}
+                      max={32}
+                      value={String(config.fontSizePx)}
+                      onChange={(e) =>
+                        setConfig((c) => ({
+                          ...c,
+                          fontSizePx: Math.max(10, Number(e.target?.value) || c.fontSizePx),
+                        }))
+                      }
+                    />
+                  </s-grid>
+                  <s-select
+                    label="Font"
+                    value={config.fontFamily}
+                    onChange={(e) => setConfig((c) => ({ ...c, fontFamily: e.target?.value ?? "inherit" }))}
+                  >
+                    <s-option value="inherit">Inherit theme</s-option>
+                    <s-option value="system">System UI</s-option>
+                    <s-option value="serif">Serif</s-option>
+                    <s-option value="mono">Monospace</s-option>
+                  </s-select>
+                  <s-grid gridTemplateColumns="1fr 1fr" gap="base">
+                    <s-text-field
+                      label="Padding Y (px)"
+                      type="number"
+                      min={0}
+                      max={48}
+                      value={String(config.paddingYpx)}
+                      onChange={(e) =>
+                        setConfig((c) => ({ ...c, paddingYpx: Math.max(0, Number(e.target?.value) || 0) }))
+                      }
+                    />
+                    <s-text-field
+                      label="Padding X (px)"
+                      type="number"
+                      min={0}
+                      max={64}
+                      value={String(config.paddingXpx)}
+                      onChange={(e) =>
+                        setConfig((c) => ({ ...c, paddingXpx: Math.max(0, Number(e.target?.value) || 0) }))
+                      }
+                    />
+                  </s-grid>
+                </>
+              ) : null}
+
+              {activeTab === "links" && showLinksTab ? (
+                <>
+                  <s-text-field
+                    label="Link URL (optional)"
+                    value={config.linkUrl}
+                    onChange={(e) => setConfig((c) => ({ ...c, linkUrl: e.target?.value ?? "" }))}
+                    placeholder="https://"
+                  />
+                  <s-checkbox
+                    label="Underline link"
+                    checked={config.linkUnderline}
+                    onChange={(e) =>
+                      setConfig((c) => ({ ...c, linkUnderline: e.target?.checked ?? false }))
+                    }
+                  />
+                  <s-text-field
+                    label="CTA button label (optional)"
+                    value={config.ctaLabel ?? ""}
+                    onChange={(e) => setConfig((c) => ({ ...c, ctaLabel: e.target?.value ?? "" }))}
+                  />
+                  <ColorPickerField
+                    label="CTA button color"
+                    value={config.ctaBackgroundColor || "#EF5350"}
+                    onChange={(v) => setConfig((c) => ({ ...c, ctaBackgroundColor: v }))}
+                  />
+                  {/* <label style={{ display: "block", fontSize: 13, fontWeight: 500, marginBottom: 4 }}>
+                    Custom Liquid
+                  </label>
+                  <textarea
+                    value={customLiquid}
+                    onChange={(e) => setCustomLiquid(e.currentTarget.value)}
+                    rows={4}
+                    style={{ width: "100%", boxSizing: "border-box", fontFamily: "ui-monospace, monospace", fontSize: 12, padding: 10, borderRadius: 8, border: "1px solid #c9cccf", resize: "vertical" }}
+                    spellCheck={false}
+                  />
+                  <label style={{ display: "block", fontSize: 13, fontWeight: 500, marginBottom: 4 }}>
+                    Custom HTML
+                  </label>
+                  <textarea
+                    value={customHtml}
+                    onChange={(e) => setCustomHtml(e.currentTarget.value)}
+                    rows={3}
+                    style={{ width: "100%", boxSizing: "border-box", fontFamily: "ui-monospace, monospace", fontSize: 12, padding: 10, borderRadius: 8, border: "1px solid #c9cccf", resize: "vertical" }}
+                    spellCheck={false}
+                  />
+                  <label style={{ display: "block", fontSize: 13, fontWeight: 500, marginBottom: 4 }}>
+                    Custom CSS
+                  </label>
+                  <textarea
+                    value={customCss}
+                    onChange={(e) => setCustomCss(e.currentTarget.value)}
+                    rows={3}
+                    style={{ width: "100%", boxSizing: "border-box", fontFamily: "ui-monospace, monospace", fontSize: 12, padding: 10, borderRadius: 8, border: "1px solid #c9cccf", resize: "vertical" }}
+                    spellCheck={false}
+                  /> */}
+                </>
+              ) : null}
+            </s-stack>
+          </s-box>
+          <div style={{ position: "sticky", top: 8, alignSelf: "start", maxWidth: "100%" }}>
+            <s-stack direction="block" gap="base">
+              <s-text type="strong">Live preview</s-text>
+              <div className="ab-preview-shell">
+                <s-box padding="none" borderWidth="base" borderRadius="base" background="base">
+                  <div
+                    style={{
+                      height: 40,
+                      background: "linear-gradient(90deg, #6366f1 0%, #a78bfa 45%, #38bdf8 100%)",
+                      display: "flex",
+                      alignItems: "center",
+                      paddingLeft: 14,
+                      fontSize: 12,
+                      fontWeight: 600,
+                      color: "#fff",
+                    }}
+                  >
+                    Storefront preview
+                  </div>
+                  <FixedAnnouncementPreviewShell
+                    barType={barType}
+                    config={config}
+                    customHtml={customHtml}
+                    customCss={customCss}
+                    customLiquid={customLiquid}
+                    shopDomain={shop}
+                    sectionHtmlId={sectionHtmlId}
+                  />
+                </s-box>
+              </div>
+            </s-stack>
+          </div>
+        </div>
+        <div className="ab-design-dialog__footer">
+          <s-stack direction="inline" gap="small">
+            <s-button type="button" variant="primary" onClick={onSubmit}>
+              {isEditing ? "Save changes" : "Create"}
+            </s-button>
+            {/* {isEditing ? (
+              <s-button type="button" variant="secondary" tone="critical" onClick={onDelete}>
+                Delete
+              </s-button>
+            ) : null} */}
+            <s-button type="button" variant="secondary" onClick={onClose}>
+              Cancel
+            </s-button>
+          </s-stack>
+        </div>
+      </div>
+    </dialog>
+  );
+}
+
 // ── ColorPickerField ──────────────────────────────────────────────────────────
 // Clickable colour swatch + hex text input, kept in sync. Clicking the swatch
 // opens the native OS colour picker.
@@ -2636,6 +3324,7 @@ function ColorPickerField({ label, value, onChange }) {
   }, [value]);
 
   const pickerHex = toPickerHex(value);
+  const swatchFill = isCssBackgroundPaint(value) ? String(value).trim() : pickerHex;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
@@ -2654,14 +3343,18 @@ function ColorPickerField({ label, value, onChange }) {
       >
         {/* Clickable swatch */}
         <span
-          onClick={() => inputRef.current && inputRef.current.click()}
-          title="Pick a colour"
+          title={
+            isCssBackgroundPaint(value)
+              ? "Pick a solid color (replaces gradient)"
+              : "Pick a colour"
+          }
           style={{
             display: "inline-block",
+            position: "relative",
             width: 30,
             height: 30,
             borderRadius: 7,
-            background: pickerHex,
+            background: swatchFill,
             border: "2px solid #e5e7eb",
             boxShadow: "inset 0 0 0 1px rgba(0,0,0,0.10)",
             flexShrink: 0,
@@ -2670,29 +3363,29 @@ function ColorPickerField({ label, value, onChange }) {
           }}
           onMouseEnter={(e) => { e.currentTarget.style.transform = "scale(1.12)"; }}
           onMouseLeave={(e) => { e.currentTarget.style.transform = "scale(1)"; }}
-        />
-
-        {/* Hidden native colour picker — triggered by swatch click */}
-        <input
-          ref={inputRef}
-          type="color"
-          value={pickerHex}
-          onChange={(e) => {
-            const v = e.target.value;
-            setDraft(v);
-            onChange(v);
-          }}
-          style={{
-            opacity: 0,
-            width: 0,
-            height: 0,
-            border: "none",
-            padding: 0,
-            position: "absolute",
-            pointerEvents: "none",
-          }}
-          tabIndex={-1}
-        />
+        >
+          <input
+            ref={inputRef}
+            type="color"
+            value={pickerHex}
+            onChange={(e) => {
+              const v = e.target.value;
+              setDraft(v);
+              onChange(v);
+            }}
+            style={{
+              position: "absolute",
+              inset: 0,
+              width: "100%",
+              height: "100%",
+              opacity: 0,
+              cursor: "pointer",
+              border: "none",
+              padding: 0,
+            }}
+            aria-label={`${label} color picker`}
+          />
+        </span>
 
         {/* Editable hex text */}
         <input
@@ -2784,10 +3477,14 @@ function AnnouncementPreview({
       : {};
 
   const linkify = (text) => {
-    if (!config.linkUrl) return text;
+    const url =
+      barType === "sticky" && String(config.ctaLabel ?? "").trim() && config.linkUrl
+        ? ""
+        : config.linkUrl;
+    if (!url) return text;
     return (
       <a
-        href={config.linkUrl}
+        href={url}
         style={{
           color: "inherit",
           textDecoration: config.linkUnderline ? "underline" : "none",
@@ -2865,7 +3562,7 @@ function AnnouncementPreview({
       </div>
     );
   } else {
-    body = (
+    const stackInner = (
       <div
         style={{
           display: "flex",
@@ -2882,6 +3579,52 @@ function AnnouncementPreview({
           </div>
         ))}
       </div>
+    );
+    const ctaTrim = String(config.ctaLabel ?? "").trim();
+    const hasCta = Boolean(ctaTrim && config.linkUrl);
+    body = hasCta ? (
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "row",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 14,
+          width: "100%",
+          minWidth: 0,
+          flexWrap: "wrap",
+        }}
+      >
+        <div style={{ flex: "1 1 200px", minWidth: 0 }}>{stackInner}</div>
+        <a
+          href={config.linkUrl}
+          onClick={(e) => e.preventDefault()}
+          style={{
+            flex: "0 0 auto",
+            backgroundColor: config.ctaBackgroundColor || "#EF5350",
+            color: "#fff",
+            fontWeight: 600,
+            fontSize: "0.9em",
+            padding: "6px 14px",
+            borderRadius: 6,
+            textDecoration: "none",
+            whiteSpace: "nowrap",
+            transition: "opacity 0.15s ease, transform 0.12s ease",
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.opacity = "0.92";
+            e.currentTarget.style.transform = "translateY(-1px)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.opacity = "1";
+            e.currentTarget.style.transform = "none";
+          }}
+        >
+          {ctaTrim}
+        </a>
+      </div>
+    ) : (
+      stackInner
     );
   }
 
@@ -2900,6 +3643,31 @@ function AnnouncementPreview({
         style={style}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 8, ...maxInner }}>
+          {barType === "rotating" && !trimmedCustom && config.messages.length > 1 ? (
+            <button
+              type="button"
+              aria-label="Previous announcement"
+              onClick={() =>
+                setRotIndex((i) => (i - 1 + config.messages.length) % config.messages.length)
+              }
+              style={{
+                flex: "0 0 auto",
+                border: "none",
+                background: "rgba(255,255,255,0.2)",
+                color: "inherit",
+                width: 28,
+                height: 28,
+                borderRadius: 6,
+                cursor: "pointer",
+                fontSize: 16,
+                lineHeight: 1,
+                display: "grid",
+                placeItems: "center",
+              }}
+            >
+              ‹
+            </button>
+          ) : null}
           <div
             style={{
               flex: "1 1 auto",
@@ -2909,6 +3677,29 @@ function AnnouncementPreview({
           >
             {body}
           </div>
+          {barType === "rotating" && !trimmedCustom && config.messages.length > 1 ? (
+            <button
+              type="button"
+              aria-label="Next announcement"
+              onClick={() => setRotIndex((i) => (i + 1) % config.messages.length)}
+              style={{
+                flex: "0 0 auto",
+                border: "none",
+                background: "rgba(255,255,255,0.2)",
+                color: "inherit",
+                width: 28,
+                height: 28,
+                borderRadius: 6,
+                cursor: "pointer",
+                fontSize: 16,
+                lineHeight: 1,
+                display: "grid",
+                placeItems: "center",
+              }}
+            >
+              ›
+            </button>
+          ) : null}
           {config.dismissible ? (
             <span
               style={{
@@ -2958,10 +3749,10 @@ function FixedAnnouncementPreviewShell({
     <div
       style={{
         position: "relative",
-        height: 180,
-        background: "#fafafa",
+        height: 200,
+        background: "linear-gradient(180deg, #f8fafc 0%, #eef2ff 55%, #f1f5f9 100%)",
         overflow: "hidden",
-        borderRadius: "0 0 6px 6px",
+        borderRadius: "0 0 12px 12px",
       }}
     >
       <div
@@ -3136,9 +3927,6 @@ export default function AnnouncementBarsPage() {
     shop,
     bars,
     editingBar,
-    announcementBarEditorUrl,
-    announcementBarBlockHeaderUrl,
-    clientIdConfigured,
   } = useLoaderData();
   const actionData = useActionData();
   const location = useLocation();
@@ -3160,6 +3948,39 @@ export default function AnnouncementBarsPage() {
   });
 
   const editKey = editingBar?.id ?? "__new__";
+
+  const [designModalOpen, setDesignModalOpen] = useState(false);
+  const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [createActiveTab, setCreateActiveTab] = useState("messages");
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [selectedTemplateId, setSelectedTemplateId] = useState("");
+  const [tablePageSize, setTablePageSize] = useState(10);
+  const [tablePage, setTablePage] = useState(1);
+
+  useEffect(() => {
+    setDesignModalOpen(false);
+  }, [editKey]);
+
+  useEffect(() => {
+    if (selectedTemplateId !== "simple" && createActiveTab === "links") {
+      setCreateActiveTab("messages");
+    }
+  }, [createActiveTab, selectedTemplateId]);
+
+  const totalRecords = bars.length;
+  const totalPages = Math.max(1, Math.ceil(totalRecords / tablePageSize));
+  const currentPage = Math.min(tablePage, totalPages);
+  const pageStart = (currentPage - 1) * tablePageSize;
+  const paginatedBars = useMemo(
+    () => bars.slice(pageStart, pageStart + tablePageSize),
+    [bars, pageStart, tablePageSize],
+  );
+  const pageEnd = Math.min(pageStart + paginatedBars.length, totalRecords);
+
+  useEffect(() => {
+    if (tablePage > totalPages) setTablePage(totalPages);
+  }, [tablePage, totalPages]);
+
 
   const withShopifyParams = useCallback(
     (path) => {
@@ -3187,6 +4008,9 @@ export default function AnnouncementBarsPage() {
       setSectionHtmlId(
         parseConfig(editingBar.configJson).sectionHtmlId || `sce-ab-${editingBar.id}`,
       );
+      setCreateActiveTab("messages");
+      setSelectedTemplateId("");
+      setCreateModalOpen(true);
     } else {
       setName("");
       setBarType("sticky");
@@ -3195,6 +4019,8 @@ export default function AnnouncementBarsPage() {
       setCustomLiquid("");
       setCustomCss("");
       setSectionHtmlId(generateAnnouncementSectionHtmlId());
+      setSelectedTemplateId("");
+      setCreateModalOpen(false);
     }
   }, [editKey]);
 
@@ -3253,13 +4079,13 @@ export default function AnnouncementBarsPage() {
     }
   }, [editingBar, navigate, withShopifyParams]);
 
-  const typeLabel = useMemo(() => {
-    if (customLiquid.trim()) return "Custom Liquid";
-    if (customHtml.trim()) return "Custom HTML";
-    if (barType === "marquee") return "Marquee";
-    if (barType === "rotating") return "Rotating";
-    return "Sticky";
-  }, [barType, customHtml, customLiquid]);
+  const openCreateFlow = useCallback(() => {
+    handleClear();
+    setCreateActiveTab("messages");
+    setSelectedTemplateId("");
+    setDesignModalOpen(true);
+    setCreateModalOpen(false);
+  }, [handleClear]);
 
   const applyStylePreset = useCallback(
     (presetId) => {
@@ -3280,499 +4106,251 @@ export default function AnnouncementBarsPage() {
   );
 
   return (
-    <s-page heading="Announcement bars">
-      <s-button
-        slot="secondary-actions"
-        variant="tertiary"
-        onClick={() => navigate(withShopifyParams("/app/announcement-bars"))}
-      >
-        New bar
-      </s-button>
-
-      <s-section heading="Builder">
-        <s-stack direction="block" gap="base">
-          {!clientIdConfigured ? (
-            <s-banner tone="warning" heading="Theme link may be incomplete">
-                Set SHOPIFY_API_KEY in .env so the theme editor deep links (App embeds and Add block) work.
-            </s-banner>
-          ) : null}
-          {actionData?.ok === false && actionData?.error ? (
-            <s-banner tone="critical" heading="Could not save">
-              {actionData.error}
-            </s-banner>
-          ) : null}
-          <s-grid
-            gridTemplateColumns="minmax(300px, 1fr) minmax(320px, 1.1fr)"
-            gap="large"
-            alignItems="start"
-          >
-            {/* ── Left: Controls ── */}
-            <s-box padding="base" borderWidth="base" borderRadius="base" background="subdued">
-              <Form method="post" onSubmit={handleSave}>
-                <s-stack direction="block" gap="base">
-                  <s-text type="strong">Controls</s-text>
-
-                  <s-text-field
-                    label="Internal name"
-                    value={name}
-                    onChange={(e) => setName(e.currentTarget.value)}
-                    autocomplete="off"
-                    required
-                  />
-
-                  <s-text-field
-                    label="Section HTML ID"
-                    value={sectionHtmlId}
-                    details="One id for the whole bar on the storefront (including marquee text). Leave the generated value or set your own (letters, numbers, hyphens, underscores; must start with a letter). Merchants should paste this Section ID in the theme block."
-                    onChange={(e) => setSectionHtmlId(e.currentTarget.value)}
-                    autocomplete="off"
-                  />
-
-                  <s-select
-                    label="Bar type"
-                    value={barType}
-                    details="Sticky: fixed top. Marquee: scrolling text. Rotating: cycles messages."
-                    onChange={(e) => setBarType(e.currentTarget.value)}
-                  >
-                    <s-option value="sticky">Sticky</s-option>
-                    <s-option value="marquee">Marquee</s-option>
-                    <s-option value="rotating">Rotating</s-option>
-                  </s-select>
-
-                  <s-box padding="small" borderWidth="base" borderRadius="base" background="default">
-                    <s-stack direction="block" gap="small">
-                      <s-text type="strong">Quick styles</s-text>
-                      <s-paragraph>
-                        Apply a starter style for your banner examples, then fine-tune spacing/text/colors.
-                      </s-paragraph>
-                      <s-stack direction="inline" gap="small">
-                        <s-button
-                          type="button"
-                          variant="secondary"
-                          onClick={() => applyStylePreset("running")}
-                        >
-                          Running Bar
-                        </s-button>
-                        <s-button
-                          type="button"
-                          variant="secondary"
-                          onClick={() => applyStylePreset("fixed")}
-                        >
-                          Fixed / Sticky
-                        </s-button>
-                        <s-button
-                          type="button"
-                          variant="secondary"
-                          onClick={() => applyStylePreset("carousel")}
-                        >
-                          Carousel
-                        </s-button>
-                      </s-stack>
-                    </s-stack>
-                  </s-box>
-
-                  {/* ── Messages ── */} 
-                  {config.messages.map((msg, i) => (
-                    <s-text-field
-                      key={i}
-                      label={config.messages.length > 1 ? `Message ${i + 1}` : "Message"}
-                      value={msg}
-                      onChange={(e) => {
-                        const v = e.currentTarget.value;
-                        setConfig((c) => {
-                          const messages = [...c.messages];
-                          messages[i] = v;
-                          return { ...c, messages };
-                        });
-                      }}
-                      autocomplete="off"
-                    />
-                  ))}
-                  <s-stack direction="inline" gap="small">
-                    <s-button
-                      type="button"
-                      variant="secondary"
-                      onClick={() =>
-                        setConfig((c) => ({ ...c, messages: [...c.messages, ""] }))
-                      }
-                    >
-                      Add message
-                    </s-button>
-                    {config.messages.length > 1 ? (
-                      <s-button
-                        type="button"
-                        variant="tertiary"
-                        tone="critical"
-                        onClick={() =>
-                          setConfig((c) => ({
-                            ...c,
-                            messages: c.messages.slice(0, -1),
-                          }))
-                        }
-                      >
-                        Remove last
-                      </s-button>
-                    ) : null}
-                  </s-stack>
-
-                  <s-divider />
-
-                  {/* ── Link & behaviour ── */}
-                  <s-text type="strong">Link & behavior</s-text>
-                  <s-text-field
-                    label="Link URL (optional)"
-                    value={config.linkUrl}
-                    onChange={(e) => {
-                      const linkUrl = e.target?.value ?? "";
-                      setConfig((c) => ({ ...c, linkUrl }));
-                    }}
-                    autocomplete="off"
-                    placeholder="https://"
-                  />
-                  <s-checkbox
-                    label="Underline link"
-                    checked={config.linkUnderline}
-                    onChange={(e) => {
-                      const checked = e.target?.checked ?? false;
-                      setConfig((c) => ({ ...c, linkUnderline: checked }));
-                    }}
-                  />
-                  <s-checkbox
-                    label="Dismissible (shopper can close)"
-                    checked={config.dismissible}
-                    onChange={(e) => {
-                      const checked = e.target?.checked ?? false;
-                      setConfig((c) => ({ ...c, dismissible: checked }));
-                    }}
-                  />
-
-                  {barType === "marquee" ? (
-                    <s-text-field
-                      label="Marquee duration (seconds)"
-                      type="number"
-                      min={4}
-                      max={120}
-                      value={String(config.marqueeSpeedSeconds)}
-                      onChange={(e) => {
-                        const n = Number(e.target?.value);
-                        setConfig((c) => ({
-                          ...c,
-                          marqueeSpeedSeconds: Math.max(4, n || c.marqueeSpeedSeconds),
-                        }));
-                      }}
-                    />
-                  ) : null}
-
-                  {barType === "rotating" ? (
-                    <s-text-field
-                      label="Rotate every (ms)"
-                      type="number"
-                      min={1500}
-                      max={60000}
-                      step={500}
-                      value={String(config.rotateIntervalMs)}
-                      onChange={(e) => {
-                        const n = Number(e.target?.value);
-                        setConfig((c) => ({
-                          ...c,
-                          rotateIntervalMs: Math.max(1500, n || c.rotateIntervalMs),
-                        }));
-                      }}
-                    />
-                  ) : null}
-
-                  <s-divider />
-
-                  {/* ── Colors (with pickers) ── */}
-                  <s-text type="strong">Colors</s-text>
-                  <div style={{ display: "grid"}}>
-                    <ColorPickerField
-                      label="Background"
-                      value={config.backgroundColor}
-                      onChange={(v) => setConfig((c) => ({ ...c, backgroundColor: v }))}
-                    />
-                    <ColorPickerField
-                      label="Text"
-                      value={config.textColor}
-                      onChange={(v) => setConfig((c) => ({ ...c, textColor: v }))}
-                    />
-                    <ColorPickerField
-                      label="Border"
-                      value={config.borderColor}
-                      onChange={(v) => setConfig((c) => ({ ...c, borderColor: v }))}
-                    />
-                    <s-text-field
-                      label="Border width (px)"
-                      type="number"
-                      min={0}
-                      max={16}
-                      value={String(config.borderWidthPx)}
-                      onChange={(e) => {
-                        const n = Number(e.target?.value);
-                        setConfig((c) => ({
-                          ...c,
-                          borderWidthPx: Math.max(0, n || 0),
-                        }));
-                      }}
-                    />
-                  </div>
-
-                  <s-divider />
-
-                  {/* ── Typography & layout ── */}
-                  <s-text type="strong">Typography & layout</s-text>
-                  <s-select
-                    label="Font"
-                    value={config.fontFamily}
-                    onChange={(e) => {
-                      const fontFamily = e.target?.value ?? "inherit";
-                      setConfig((c) => ({ ...c, fontFamily }));
-                    }}
-                  >
-                    <s-option value="inherit">Inherit theme</s-option>
-                    <s-option value="system">System UI</s-option>
-                    <s-option value="serif">Serif</s-option>
-                    <s-option value="mono">Monospace</s-option>
-                  </s-select>
-                  <s-grid gridTemplateColumns="1fr 1fr" gap="base">
-                    <s-text-field
-                      label="Font size (px)"
-                      type="number"
-                      min={10}
-                      max={32}
-                      value={String(config.fontSizePx)}
-                      onChange={(e) => {
-                        const n = Number(e.target?.value);
-                        setConfig((c) => ({
-                          ...c,
-                          fontSizePx: Math.max(10, n || c.fontSizePx),
-                        }));
-                      }}
-                    />
-                    <s-select
-                      label="Weight"
-                      value={config.fontWeight}
-                      onChange={(e) => {
-                        const fontWeight = e.target?.value ?? "500";
-                        setConfig((c) => ({ ...c, fontWeight }));
-                      }}
-                    >
-                      <s-option value="400">400</s-option>
-                      <s-option value="500">500</s-option>
-                      <s-option value="600">600</s-option>
-                      <s-option value="700">700</s-option>
-                    </s-select>
-                  </s-grid>
-                  <s-select
-                    label="Text align"
-                    value={config.textAlign}
-                    onChange={(e) => {
-                      const textAlign = e.target?.value ?? "center";
-                      setConfig((c) => ({ ...c, textAlign }));
-                    }}
-                  >
-                    <s-option value="left">Left</s-option>
-                    <s-option value="center">Center</s-option>
-                    <s-option value="right">Right</s-option>
-                  </s-select>
-                  <s-grid gridTemplateColumns="1fr 1fr" gap="base">
-                    <s-text-field
-                      label="Letter spacing (em)"
-                      type="number"
-                      min={0}
-                      max={0.5}
-                      step={0.01}
-                      value={String(config.letterSpacingEm)}
-                      onChange={(e) => {
-                        const n = Number(e.target?.value);
-                        setConfig((c) => ({
-                          ...c,
-                          letterSpacingEm: Math.max(0, n || 0),
-                        }));
-                      }}
-                    />
-                    <s-text-field
-                      label="Line height"
-                      type="number"
-                      min={1}
-                      max={2.5}
-                      step={0.05}
-                      value={String(config.lineHeight)}
-                      onChange={(e) => {
-                        const n = Number(e.target?.value);
-                        setConfig((c) => ({
-                          ...c,
-                          lineHeight: Math.max(1, n || c.lineHeight),
-                        }));
-                      }}
-                    />
-                  </s-grid>
-                  <s-grid gridTemplateColumns="1fr 1fr" gap="base">
-                    <s-text-field
-                      label="Padding Y (px)"
-                      type="number"
-                      min={0}
-                      max={48}
-                      value={String(config.paddingYpx)}
-                      onChange={(e) => {
-                        const n = Number(e.target?.value);
-                        setConfig((c) => ({
-                          ...c,
-                          paddingYpx: Math.max(0, n || 0),
-                        }));
-                      }}
-                    />
-                    <s-text-field
-                      label="Padding X (px)"
-                      type="number"
-                      min={0}
-                      max={64}
-                      value={String(config.paddingXpx)}
-                      onChange={(e) => {
-                        const n = Number(e.target?.value);
-                        setConfig((c) => ({
-                          ...c,
-                          paddingXpx: Math.max(0, n || 0),
-                        }));
-                      }}
-                    />
-                  </s-grid>
-                  <s-grid gridTemplateColumns="1fr 1fr" gap="base">
-                    <s-text-field
-                      label="Corner radius (px)"
-                      type="number"
-                      min={0}
-                      max={32}
-                      value={String(config.borderRadiusPx)}
-                      onChange={(e) => {
-                        const n = Number(e.target?.value);
-                        setConfig((c) => ({
-                          ...c,
-                          borderRadiusPx: Math.max(0, n || 0),
-                        }));
-                      }}
-                    />
-                    <s-text-field
-                      label="Max content width (px, 0 = full)"
-                      type="number"
-                      min={0}
-                      max={1600}
-                      value={String(config.maxContentWidthPx)}
-                      onChange={(e) => {
-                        const n = Number(e.target?.value);
-                        setConfig((c) => ({
-                          ...c,
-                          maxContentWidthPx: Math.max(0, n || 0),
-                        }));
-                      }}
-                    />
-                  </s-grid>
-                  <s-select
-                    label="Shadow"
-                    value={config.shadow}
-                    onChange={(e) => {
-                      const shadow = e.target?.value ?? "none";
-                      setConfig((c) => ({ ...c, shadow }));
-                    }}
-                  >
-                    <s-option value="none">None</s-option>
-                    <s-option value="subtle">Subtle</s-option>
-                    <s-option value="medium">Medium</s-option>
-                  </s-select>
-
-                  <s-divider />
-
-                  <s-stack direction="inline" gap="base">
-                    <s-button variant="primary" type="submit">
-                      {editingBar ? "Save changes" : "Create bar"}
-                    </s-button>
-                    <s-button type="button" variant="secondary" onClick={handleClear}>
-                      Clear
-                    </s-button>
-                  </s-stack>
-
-                  {editingBar ? (
-                    <s-stack direction="block" gap="base">
-                      <s-paragraph>
-                        Section ID (paste this in section-ID based theme blocks):{" "}
-                        <s-text fontVariantNumeric="tabular-nums" type="strong">
-                          {parseConfig(editingBar.configJson).sectionHtmlId || `sce-ab-${editingBar.id}`}
-                        </s-text>
-                      </s-paragraph>
-                      <s-stack direction="inline" gap="small">
-                        <s-button
-                          type="button"
-                          variant="secondary"
-                          onClick={() => {
-                            const sid =
-                              parseConfig(editingBar.configJson).sectionHtmlId || `sce-ab-${editingBar.id}`;
-                            void navigator.clipboard?.writeText(sid);
-                          }}
-                        >
-                          Copy Section ID
-                        </s-button>
-                      </s-stack>
-
-                     
-                      
-                      
-                    </s-stack>
-                  ) : null}
-                </s-stack>
-              </Form>
-            </s-box>
-
-            {/* ── Right: Live preview ── */}
-            <div
-              style={{
-                position: "sticky",
-                top: "12px",
-                alignSelf: "start",
-                maxWidth: "100%",
+    <>
+      <style>
+        {`
+        @keyframes ab-fade-in {
+          from { opacity: 0; transform: translateY(6px); }
+          to { opacity: 1; transform: none; }
+        }
+        .ab-builder-animate { animation: ab-fade-in 0.35s ease-out both; }
+        .ab-hero {
+          padding: clamp(1rem, 2.5vw, 1.5rem) clamp(1rem, 3vw, 1.75rem);
+          border-radius: 14px;
+          background: linear-gradient(135deg, rgba(99, 102, 241, 0.08) 0%, rgba(56, 189, 248, 0.07) 55%, rgba(167, 139, 250, 0.09) 100%);
+          border: 1px solid rgba(99, 102, 241, 0.14);
+        }
+        .ab-hero s-heading { margin: 0 0 0.35rem; }
+        .ab-hero-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 12px; }
+        .ab-builder-grid {
+          display: grid;
+          gap: clamp(1rem, 3vw, 1.75rem);
+          grid-template-columns: 1fr;
+          align-items: start;
+        }
+        @media (min-width: 960px) {
+          .ab-builder-grid { grid-template-columns: minmax(280px, 1fr) minmax(300px, 1.08fr); }
+        }
+        .ab-preview-shell { border-radius: 12px; overflow: hidden; box-shadow: 0 12px 40px rgba(15, 23, 42, 0.12); }
+        .ab-design-dialog {
+          width: 960px;
+          // max-height: min(90vh, 720px);
+          padding: 0;
+          border: none;
+          border-radius: 16px;
+          background: transparent;
+          box-shadow: none;
+        }
+        .ab-design-dialog::backdrop {
+          background: rgba(15, 23, 42, 0.45);
+          backdrop-filter: blur(4px);
+        }
+        .ab-design-dialog__panel {
+          background: #fafbfc;
+          border-radius: 16px;
+          border: 1px solid rgba(15, 23, 42, 0.08);
+          box-shadow: 0 24px 80px rgba(15, 23, 42, 0.2);
+          display: flex;
+          flex-direction: column;
+          max-height: min(90vh, 720px);
+          overflow: hidden;
+        }
+        .ab-design-dialog__head {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 12px;
+          padding: 20px 22px 12px;
+          border-bottom: 1px solid rgba(15, 23, 42, 0.06);
+        }
+        .ab-design-dialog__title { margin: 0 0 6px; font-size: 1.25rem; font-weight: 600; color: #0f172a; }
+        .ab-design-dialog__sub { margin: 0; font-size: 0.875rem; line-height: 1.45; color: #64748b; max-width: 44ch; }
+        .ab-design-dialog__close {
+          flex-shrink: 0;
+          width: 36px;
+          height: 36px;
+          border: none;
+          border-radius: 10px;
+          background: rgba(15, 23, 42, 0.06);
+          color: #334155;
+          font-size: 1.35rem;
+          line-height: 1;
+          cursor: pointer;
+        }
+        .ab-design-dialog__grid {
+          display: grid;
+          grid-template-columns: 1fr;
+          gap: 12px;
+          padding: 16px 22px;
+          overflow-y: auto;
+          flex: 1;
+          min-height: 0;
+        }
+        @media (min-width: 700px) {
+          .ab-design-dialog__grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        }
+        .ab-design-dialog__card {
+          text-align: left;
+          border: 1px solid rgba(15, 23, 42, 0.1);
+          border-radius: 14px;
+          padding: 12px;
+          background: #fff;
+          cursor: pointer;
+          font: inherit;
+          color: inherit;
+          transition: border-color 0.18s ease, box-shadow 0.2s ease, transform 0.15s ease;
+        }
+        .ab-design-dialog__card:hover {
+          border-color: rgba(99, 102, 241, 0.45);
+          box-shadow: 0 8px 28px rgba(99, 102, 241, 0.12);
+          transform: translateY(-2px);
+        }
+        .ab-design-dialog__card-title { display: block; margin-top: 10px; font-weight: 600; font-size: 0.9rem; }
+        .ab-design-dialog__card-desc { display: block; margin-top: 4px; font-size: 0.78rem; line-height: 1.35; color: #64748b; }
+        .ab-design-dialog__footer { padding: 12px 22px 18px; border-top: 1px solid rgba(15, 23, 42, 0.06); }
+        .ab-design-dialog__skip {
+          width: 100%;
+          padding: 10px 14px;
+          border: 1px dashed rgba(15, 23, 42, 0.18);
+          border-radius: 10px;
+          background: transparent;
+          color: #64748b;
+          font-size: 0.875rem;
+          cursor: pointer;
+        }
+        .ab-design-dialog__skip:hover {
+          border-color: rgba(99, 102, 241, 0.35);
+          color: #4338ca;
+          background: rgba(99, 102, 241, 0.04);
+        }
+        .ab-acc { border: 1px solid rgba(15, 23, 42, 0.08); border-radius: 12px; padding: 0 12px 12px; margin-bottom: 10px; background: rgba(255,255,255,0.5); }
+        .ab-acc__summary {
+          cursor: pointer;
+          font-weight: 600;
+          padding: 12px 4px;
+          list-style: none;
+        }
+        .ab-acc__summary::-webkit-details-marker { display: none; }
+        .ab-acc__body { display: flex; flex-direction: column; gap: 10px; padding-top: 4px; }
+        .ab-behavior-grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
+        @media (min-width: 540px) { .ab-behavior-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+        .ab-behavior-tile {
+          padding: 12px 10px;
+          border-radius: 12px;
+          border: 2px solid rgba(15, 23, 42, 0.1);
+          background: rgba(255, 255, 255, 0.9);
+          cursor: pointer;
+          font: inherit;
+          text-align: center;
+          transition: border-color 0.18s ease, box-shadow 0.18s ease;
+        }
+        .ab-behavior-tile:hover { border-color: rgba(99, 102, 241, 0.35); }
+        .ab-behavior-tile--on { border-color: #6366f1; box-shadow: 0 0 0 1px rgba(99, 102, 241, 0.2); }
+        .ab-behavior-tile__k { display: block; font-weight: 700; font-size: 0.72rem; letter-spacing: 0.05em; text-transform: uppercase; color: #6366f1; margin-bottom: 4px; }
+        .ab-behavior-tile__t { display: block; font-weight: 600; font-size: 0.9rem; color: #0f172a; }
+        .ab-behavior-tile__d { display: block; margin-top: 6px; font-size: 0.72rem; line-height: 1.35; color: #64748b; }
+      `}
+      </style>
+      <DesignPickerModal
+        open={designModalOpen}
+        presets={ANNOUNCEMENT_STYLE_PRESETS}
+        onClose={() => setDesignModalOpen(false)}
+        onPick={(presetId) => {
+          applyStylePreset(presetId);
+          setSelectedTemplateId(presetId);
+          setDesignModalOpen(false);
+          setCreateActiveTab("messages");
+          setCreateModalOpen(true);
+        }}
+      />
+      <AnnouncementCreateModal
+        open={createModalOpen}
+        onClose={() => {
+          setCreateModalOpen(false);
+          if (editingBar) navigate(withShopifyParams("/app/announcement-bars"));
+        }}
+        onSubmit={handleSave}
+        onDelete={() => {
+          if (editingBar) setDeleteTarget({ id: editingBar.id, name: editingBar.name });
+        }}
+        isEditing={Boolean(editingBar)}
+        activeTab={createActiveTab}
+        setActiveTab={setCreateActiveTab}
+        showLinksTab={selectedTemplateId === "simple"}
+        name={name}
+        setName={setName}
+        barType={barType}
+        setBarType={setBarType}
+        sectionHtmlId={sectionHtmlId}
+        setSectionHtmlId={setSectionHtmlId}
+        config={config}
+        setConfig={setConfig}
+        customHtml={customHtml}
+        setCustomHtml={setCustomHtml}
+        customLiquid={customLiquid}
+        setCustomLiquid={setCustomLiquid}
+        customCss={customCss}
+        setCustomCss={setCustomCss}
+        shop={shop}
+      />
+      <DeleteConfirmModal
+        open={Boolean(deleteTarget)}
+        barName={deleteTarget?.name || ""}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={() => {
+          if (!deleteTarget?.id) return;
+          const fd = new FormData();
+          fd.set("intent", "delete");
+          fd.set("id", deleteTarget.id);
+          submit(fd, { method: "post" });
+          setDeleteTarget(null);
+        }}
+      />
+      <s-page heading="Announcement bars">
+      {/* ── Bars table ── */}
+      <s-section>
+        <div
+          style={{
+            marginBottom: 12,
+            display: "flex",
+            alignItems: "end",
+            justifyContent: "space-between",
+            gap: 12,
+            flexWrap: "wrap",
+          }}
+        >
+          <div style={{ minWidth: 160, maxWidth: 200 }}>
+            <s-select
+              label="Rows per page"
+              value={String(tablePageSize)}
+              onChange={(e) => {
+                const next = Number(e.target?.value) || 10;
+                setTablePageSize(next);
+                setTablePage(1);
               }}
             >
-              <s-stack direction="block" gap="base">
-                <s-stack direction="inline" gap="small" alignItems="center">
-                  <s-text type="strong">Live preview</s-text>
-                  <s-badge tone="success">Sticky column</s-badge>
-                </s-stack>
-                <s-text tone="neutral">
-                  {typeLabel} — this preview column stays on screen while you scroll the main page
-                  (sticky). Inside the frame, the bar stays fixed and only the sample page scrolls.
-                </s-text>
-                <s-box padding="none" borderWidth="base" borderRadius="base" background="base">
-                  <div
-                    style={{
-                      height: 36,
-                      background: "#e5e7eb",
-                      display: "flex",
-                      alignItems: "center",
-                      paddingLeft: 12,
-                      fontSize: 12,
-                      color: "#374151",
-                      borderBottom: "1px solid #d1d5db",
-                    }}
-                  >
-                    Storefront preview
-                  </div>
-                  <FixedAnnouncementPreviewShell
-                    barType={barType}
-                    config={config}
-                    customHtml={customHtml}
-                    customCss={customCss}
-                    customLiquid={customLiquid}
-                    shopDomain={shop}
-                    sectionHtmlId={sectionHtmlId}
-                  />
-                </s-box>
-              </s-stack>
-            </div>
-          </s-grid>
-        </s-stack>
-      </s-section>
-
-      {/* ── Bars table ── */}
-      <s-section heading="Your bars">
+              <s-option value="5">5 / page</s-option>
+              <s-option value="10">10 / page</s-option>
+              <s-option value="25">25 / page</s-option>
+              <s-option value="50">50 / page</s-option>
+            </s-select>
+          </div>
+          <button
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "8px 14px",
+            background: "rgb(0 123 96 / 10%)",
+            color: "rgb(0 123 96)",
+            border: "1px solid rgb(0 123 96 / 20%)",
+            borderRadius: 8,
+            fontWeight: 700,
+            cursor: "pointer",
+          }} type="button" variant="primary" onClick={openCreateFlow}>
+            + Create Announcement Bar
+          </button>
+        </div>
         {bars.length === 0 ? (
           <s-box padding="large" borderWidth="base" borderRadius="base">
             <s-text tone="neutral">No bars yet. Fill in the builder and create one.</s-text>
@@ -3786,19 +4364,19 @@ export default function AnnouncementBarsPage() {
               <s-table-header listSlot="labeled">Actions</s-table-header>
             </s-table-header-row>
             <s-table-body>
-              {bars.map((b) => (
+              {paginatedBars.map((b) => (
                 <s-table-row key={b.id}>
                   <s-table-cell>
                     <s-text type="strong">{b.name}</s-text>
                   </s-table-cell>
                   <s-table-cell>
-                    <s-badge tone="info">
+                    <s-text>
                       {(b.customLiquid ?? "").trim()
                         ? "Custom Liquid"
                         : (b.customHtml ?? "").trim()
                           ? "Custom HTML"
                           : b.barType}
-                    </s-badge>
+                    </s-text>
                   </s-table-cell>
                   <s-table-cell>
                     <s-stack direction="block" gap="small-100">
@@ -3817,9 +4395,9 @@ export default function AnnouncementBarsPage() {
                           navigate(withShopifyParams(`/app/announcement-bars?edit=${b.id}`))
                         }
                       >
-                        Edit
+                         
                       </s-button>
-                      <s-button
+                      {/* <s-button
                         type="button"
                         variant="tertiary"
                         onClick={() => {
@@ -3828,20 +4406,14 @@ export default function AnnouncementBarsPage() {
                         }}
                       >
                         Copy Section ID
-                      </s-button>
+                      </s-button> */}
                       <s-button
                         type="button"
                         variant="tertiary"
                         tone="critical"
                         icon="delete"
-                        onClick={() => {
-                          const fd = new FormData();
-                          fd.set("intent", "delete");
-                          fd.set("id", b.id);
-                          submit(fd, { method: "post" });
-                        }}
-                      >
-                        Delete
+                        onClick={() => setDeleteTarget({ id: b.id, name: b.name })}
+                 >
                       </s-button>
                     </s-stack>
                   </s-table-cell>
@@ -3850,8 +4422,46 @@ export default function AnnouncementBarsPage() {
             </s-table-body>
           </s-table>
         )}
+        {bars.length > 0 ? (
+          <div
+            style={{
+              marginTop: 12,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
+              flexWrap: "wrap",
+            }}
+          >
+            <s-text tone="neutral">
+              Showing {pageStart + 1}-{pageEnd} of {totalRecords}
+            </s-text>
+            <s-stack direction="inline" gap="base" alignItems="center">
+              <s-button
+                type="button"
+                variant="secondary"
+                disabled={currentPage <= 1}
+                onClick={() => setTablePage((p) => Math.max(1, p - 1))}
+              >
+                Previous
+              </s-button>
+              <s-text tone="neutral">
+                Page {currentPage} / {totalPages}
+              </s-text>
+              <s-button
+                type="button"
+                variant="secondary"
+                disabled={currentPage >= totalPages}
+                onClick={() => setTablePage((p) => Math.min(totalPages, p + 1))}
+              >
+                Next
+              </s-button>
+            </s-stack>
+          </div>
+        ) : null}
       </s-section>
     </s-page>
+    </>
   );
 }
 

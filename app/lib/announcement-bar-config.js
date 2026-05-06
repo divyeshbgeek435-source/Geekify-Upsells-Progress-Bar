@@ -23,6 +23,9 @@ export function defaultConfig() {
     linkUrl: "",
     linkUnderline: true,
     dismissible: false,
+    /** Optional pill button (sticky bars). Requires linkUrl. */
+    ctaLabel: "",
+    ctaBackgroundColor: "#EF5350",
     /** DOM id for the whole bar (marquee text stays inside the same section). */
     sectionHtmlId: "",
   };
@@ -65,5 +68,7 @@ export function parseConfig(json) {
   merged.dismissible = Boolean(merged.dismissible);
   merged.linkUnderline = merged.linkUnderline !== false;
   merged.sectionHtmlId = String(merged.sectionHtmlId ?? "").trim();
+  merged.ctaLabel = String(merged.ctaLabel ?? "").trim();
+  merged.ctaBackgroundColor = String(merged.ctaBackgroundColor || "#EF5350").trim();
   return merged;
 }

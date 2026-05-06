@@ -1,1 +1,1 @@
-export { loader } from "./apps.sce.popup-design";
+export { loader, action } from "./apps.sce.popup-design";

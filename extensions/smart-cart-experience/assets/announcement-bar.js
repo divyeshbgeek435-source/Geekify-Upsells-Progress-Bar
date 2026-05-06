@@ -64,6 +64,8 @@
       linkUrl: "",
       linkUnderline: true,
       dismissible: false,
+      ctaLabel: "",
+      ctaBackgroundColor: "#EF5350",
     };
   }
 
@@ -99,6 +101,8 @@
     d.linkUrl = String(d.linkUrl || "").trim();
     d.dismissible = Boolean(d.dismissible);
     d.linkUnderline = d.linkUnderline !== false;
+    d.ctaLabel = String(d.ctaLabel || "").trim();
+    d.ctaBackgroundColor = String(d.ctaBackgroundColor || "#EF5350").trim();
     return d;
   }
 
@@ -147,7 +151,14 @@
     el.style.setProperty("--sce-ab-z", String(zIndex));
     el.style.setProperty("--sce-ab-message-gap", dynamicGapPx + "px");
     el.style.setProperty("--sce-ab-message-max-inline", "100%");
-    el.style.backgroundColor = cfg.backgroundColor;
+    var bg = String(cfg.backgroundColor || "").trim();
+    if (/gradient\s*\(/i.test(bg) || /^url\s*\(/i.test(bg)) {
+      el.style.background = bg;
+      el.style.backgroundColor = "transparent";
+    } else {
+      el.style.background = "";
+      el.style.backgroundColor = bg;
+    }
     el.style.color = cfg.textColor;
     el.style.borderStyle = cfg.borderWidthPx > 0 ? "solid" : "none";
     el.style.borderColor = cfg.borderWidthPx > 0 ? cfg.borderColor : "transparent";
@@ -168,12 +179,20 @@
     );
   }
 
-  function buildTextHtml(cfg, text) {
-    var esc = text
+  function escHtmlStr(text) {
+    return String(text == null ? "" : text)
       .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;");
+  }
+
+  function hrefAttr(url) {
+    return String(url || "").replace(/"/g, "&quot;");
+  }
+
+  function buildTextHtml(cfg, text) {
+    var esc = escHtmlStr(text);
     if (cfg.linkUrl) {
       return (
         '<a class="sce-announcement-bar__link" href="' +
@@ -184,6 +203,30 @@
       );
     }
     return esc;
+  }
+
+  function buildStickyStackHtml(cfg) {
+    var msgCfg = cfg;
+    if (String(cfg.ctaLabel || "").trim() && cfg.linkUrl) {
+      msgCfg = { ...cfg, linkUrl: "" };
+    }
+    var stack = buildMessagesStackHtml(msgCfg);
+    var cta = String(cfg.ctaLabel || "").trim();
+    if (!cta || !cfg.linkUrl) return stack;
+    var ctaBg = String(cfg.ctaBackgroundColor || "#EF5350").trim() || "#EF5350";
+    return (
+      '<div class="sce-announcement-bar__sticky-with-cta">' +
+      '<div class="sce-announcement-bar__sticky-with-cta__main">' +
+      stack +
+      "</div>" +
+      '<a class="sce-announcement-bar__cta" href="' +
+      hrefAttr(cfg.linkUrl) +
+      '" style="background-color:' +
+      hrefAttr(ctaBg) +
+      '">' +
+      escHtmlStr(cta) +
+      "</a></div>"
+    );
   }
 
   function messagesStackAlignClass(cfg) {
@@ -238,6 +281,17 @@
     } else {
       el.removeAttribute("id");
     }
+  }
+
+  function buildRotateBodyHtml(cfg, idx) {
+    return (
+      '<div class="sce-announcement-bar__messages-stack ' +
+      messagesStackAlignClass(cfg) +
+      '">' +
+      '<div class="sce-announcement-bar__message-line">' +
+      buildTextHtml(cfg, cfg.messages[idx] || "") +
+      "</div></div>"
+    );
   }
 
   function mountStickyBar(cfg, innerHtml, sectionHtmlId) {
@@ -356,37 +410,53 @@
     }
 
     if (barType === "rotating") {
-      var rotMod = messagesStackAlignClass(cfg);
+      var hasNav = cfg.messages.length > 1;
       var htmlR = innerWrap(
         cfg,
         '<div class="sce-announcement-bar__rotate">' +
-          '<div class="sce-announcement-bar__messages-stack ' +
-          rotMod +
-          '">' +
-          '<div class="sce-announcement-bar__message-line">' +
-          buildTextHtml(cfg, cfg.messages[0] || "") +
-          "</div></div></div>",
+          (hasNav
+            ? '<button type="button" class="sce-announcement-bar__nav" data-sce-ab-nav="prev" aria-label="Previous announcement">&#8249;</button>'
+            : "") +
+          '<div class="sce-announcement-bar__rotate-body">' +
+          buildRotateBodyHtml(cfg, 0) +
+          "</div>" +
+          (hasNav
+            ? '<button type="button" class="sce-announcement-bar__nav" data-sce-ab-nav="next" aria-label="Next announcement">&#8250;</button>'
+            : "") +
+          "</div>",
       );
       var rootR = mount(cfg, htmlR);
       var rot = rootR.querySelector(".sce-announcement-bar__rotate");
-      if (rot && cfg.messages.length > 1) {
+      var rotBody = rootR.querySelector(".sce-announcement-bar__rotate-body");
+      if (rot && rotBody && cfg.messages.length > 1) {
         var idx = 0;
+        function renderCurrent() {
+          rotBody.innerHTML = buildRotateBodyHtml(cfg, idx);
+        }
+        var prevBtn = rot.querySelector('[data-sce-ab-nav="prev"]');
+        var nextBtn = rot.querySelector('[data-sce-ab-nav="next"]');
+        if (prevBtn) {
+          prevBtn.addEventListener("click", function () {
+            idx = (idx - 1 + cfg.messages.length) % cfg.messages.length;
+            renderCurrent();
+          });
+        }
+        if (nextBtn) {
+          nextBtn.addEventListener("click", function () {
+            idx = (idx + 1) % cfg.messages.length;
+            renderCurrent();
+          });
+        }
         setManagedInterval(function () {
           idx = (idx + 1) % cfg.messages.length;
-          rot.innerHTML =
-            '<div class="sce-announcement-bar__messages-stack ' +
-            messagesStackAlignClass(cfg) +
-            '">' +
-            '<div class="sce-announcement-bar__message-line">' +
-            buildTextHtml(cfg, cfg.messages[idx] || "") +
-            "</div></div>";
+          renderCurrent();
         }, cfg.rotateIntervalMs);
       }
       bindDismiss(rootR, cfg, dismissKey);
       return;
     }
 
-    var rootS = mount(cfg, innerWrap(cfg, buildMessagesStackHtml(cfg)));
+    var rootS = mount(cfg, innerWrap(cfg, buildStickyStackHtml(cfg)));
     bindDismiss(rootS, cfg, dismissKey);
   }
 

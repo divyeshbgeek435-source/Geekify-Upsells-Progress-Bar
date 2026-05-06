@@ -11,13 +11,21 @@
     }
   }
   if (!script || !script.dataset) return;
+  var dedupeId = String(script.dataset.scePopupDesignId || "").trim();
+  var dedupeKey = "__scePopupSingleton_" + (dedupeId || "default");
+  try {
+    if (window[dedupeKey]) return;
+    window[dedupeKey] = 1;
+  } catch (_d) {
+    /* ignore */
+  }
   script.setAttribute("data-sce-popup-ran", "1");
 
   var popupDesignIdFilter = String(script.dataset.scePopupDesignId || "").trim();
   var apiUrl = String(script.dataset.apiUrl || "").trim();
   var zIndex = Math.max(1, Number(script.dataset.zIndex || "100000") || 100000);
   var refreshIntervalMs = 5000;
-  var lastRenderVersion = "";
+  var lastTickSig = "";
   var countdownTimer = null;
   var pendingShowTimeout = null;
   var rootEl = null;
@@ -26,19 +34,127 @@
     return "sce_popup_dismissed_" + String(designId || "").trim();
   }
 
-  function isDismissed(designId) {
+  function lsGet(key) {
     try {
-      return sessionStorage.getItem(dismissStorageKey(designId)) === "1";
-    } catch (e) {
-      return false;
+      return localStorage.getItem(key);
+    } catch (_e) {
+      return null;
     }
   }
 
-  function markDismissed(designId) {
+  function lsSet(key, val) {
     try {
-      sessionStorage.setItem(dismissStorageKey(designId), "1");
+      localStorage.setItem(key, val);
     } catch (_e) {
-      /* storage may be unavailable */
+      /* ignore */
+    }
+  }
+
+  function impressionKey(designId) {
+    return "sce_popup_imp_" + String(designId || "").trim();
+  }
+
+  function onceKey(designId) {
+    return "sce_popup_once_" + String(designId || "").trim();
+  }
+
+  function suppressUntilKey(designId) {
+    return "sce_popup_suppress_" + String(designId || "").trim();
+  }
+
+  function getImpressionCount(designId) {
+    var n = Number(lsGet(impressionKey(designId)) || 0);
+    return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0;
+  }
+
+  function bumpImpressionCount(designId) {
+    var k = impressionKey(designId);
+    var n = getImpressionCount(designId) + 1;
+    lsSet(k, String(n));
+  }
+
+  function pathParts(path) {
+    return String(path || "/")
+      .toLowerCase()
+      .split("?")[0]
+      .split("#")[0]
+      .split("/")
+      .filter(Boolean);
+  }
+
+  function isLikelyMarketLocaleSegment(seg) {
+    return /^[a-z]{2}(-[a-z]{2})?$/.test(String(seg || ""));
+  }
+
+  function isValidEmailForCapture(v) {
+    var s = String(v || "").trim();
+    if (!s || s.length > 254) return false;
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
+  }
+
+  function matchesPageTarget(cfg) {
+    var target = String((cfg || {}).pageTarget || "all").trim();
+    var path = String(window.location.pathname || "/").toLowerCase();
+    path = path.split("?")[0].split("#")[0];
+    var custom = String((cfg || {}).customPathContains || "").trim().toLowerCase();
+    var parts = pathParts(path);
+
+    if (target === "all") return true;
+
+    if (target === "home") {
+      if (path === "/" || path === "") return true;
+      if (parts.length === 1 && isLikelyMarketLocaleSegment(parts[0])) return true;
+      if (parts.length === 1 && parts[0] === "index") return true;
+      if (/\/pages\/home\b/i.test(path)) return true;
+      return false;
+    }
+
+    if (target === "product") return parts.indexOf("products") !== -1;
+    if (target === "collection") return parts.indexOf("collections") !== -1;
+    if (target === "cart") {
+      var last = parts[parts.length - 1];
+      return last === "cart";
+    }
+    if (target === "custom") return Boolean(custom && path.indexOf(custom) !== -1);
+    return true;
+  }
+
+  function isSuppressed(cfg) {
+    if (inThemeEditor) return false;
+    var id = String((cfg || {}).popupDesignId || "").trim();
+    if (!id) return true;
+    var maxI = Number((cfg || {}).maxImpressions);
+    if (Number.isFinite(maxI) && maxI > 0 && getImpressionCount(id) >= maxI) return true;
+    var mode = String((cfg || {}).showMode || "repeat").trim();
+    if (mode === "once") {
+      if (lsGet(onceKey(id)) === "1") return true;
+    } else {
+      var until = Number(lsGet(suppressUntilKey(id)) || 0);
+      if (until > Date.now()) return true;
+    }
+    try {
+      if (sessionStorage.getItem(dismissStorageKey(id)) === "1") return true;
+    } catch (_e) {}
+    return false;
+  }
+
+  function markDismissed(cfg) {
+    var id = String((cfg || {}).popupDesignId || "").trim();
+    if (!id) return;
+    var mode = String((cfg || {}).showMode || "repeat").trim();
+    var repeatMs = Math.max(60000, (Number((cfg || {}).repeatFrequencyMinutes) || 60) * 60000);
+    try {
+      if (mode === "once") {
+        lsSet(onceKey(id), "1");
+        lsSet(suppressUntilKey(id), "0");
+      } else {
+        lsSet(suppressUntilKey(id), String(Date.now() + repeatMs));
+      }
+      sessionStorage.removeItem(dismissStorageKey(id));
+    } catch (_e) {
+      try {
+        sessionStorage.setItem(dismissStorageKey(id), "1");
+      } catch (_e2) {}
     }
   }
 
@@ -47,6 +163,12 @@
       clearInterval(countdownTimer);
       countdownTimer = null;
     }
+    try {
+      if (rootEl && rootEl.__sceAutoCloseTimer) {
+        clearTimeout(rootEl.__sceAutoCloseTimer);
+        rootEl.__sceAutoCloseTimer = null;
+      }
+    } catch (_t) {}
     if (rootEl && rootEl.parentNode) {
       rootEl.parentNode.removeChild(rootEl);
     }
@@ -57,7 +179,7 @@
   function onKeydown(ev) {
     if (ev.key === "Escape") {
       var cfg = rootEl && rootEl.__scePopupCfg;
-      if (cfg) markDismissed(cfg.popupDesignId);
+      if (cfg) markDismissed(cfg);
       removePopup();
     }
   }
@@ -76,9 +198,23 @@
     content_only: 1,
   };
 
+  var STYLE_WHITELIST = { classic: 1, glass: 1, minimal: 1, editorial: 1 };
+
   function layoutMode(cfg) {
     var m = String((cfg || {}).layoutMode || "split_image_left").trim();
     return LAYOUT_WHITELIST[m] ? m : "split_image_left";
+  }
+
+  function visualStyle(cfg) {
+    var s = String((cfg || {}).visualStyle || "classic").trim();
+    return STYLE_WHITELIST[s] ? s : "classic";
+  }
+
+  var CLOSE_POS_WHITELIST = { top_left: 1, top_right: 1, bottom_left: 1, bottom_right: 1 };
+
+  function closeButtonPosition(cfg) {
+    var p = String((cfg || {}).closeButtonPosition || "top_right").trim().replace(/-/g, "_");
+    return CLOSE_POS_WHITELIST[p] ? p : "top_right";
   }
 
   function pad2(n) {
@@ -158,26 +294,50 @@
     return { d: pad2(d), h: pad2(h), m: pad2(m), s: pad2(sec) };
   }
 
-  function renderCountdownRow(wrap, endAtIso) {
+  function renderCountdownRow(wrap, endAtIso, cfg) {
     wrap.innerHTML = "";
     if (!endAtIso) {
       wrap.style.display = "none";
       return;
     }
     wrap.style.display = "";
+    var labeled = String((cfg || {}).countdownStyle || "").trim() === "labeled";
+    function unitHtml(val, lbl) {
+      return (
+        '<div class="sce-popup-countdown__unit">' +
+        '<span class="sce-popup-countdown__box">' +
+        val +
+        '</span><span class="sce-popup-countdown__lbl">' +
+        lbl +
+        "</span></div>"
+      );
+    }
     function tick() {
       var p = countdownParts(endAtIso);
       if (!p) return;
-      wrap.innerHTML =
-        '<span class="sce-popup-countdown__box">' +
-        p.d +
-        '</span><span class="sce-popup-countdown__box">' +
-        p.h +
-        '</span><span class="sce-popup-countdown__sep">:</span><span class="sce-popup-countdown__box">' +
-        p.m +
-        '</span><span class="sce-popup-countdown__sep">:</span><span class="sce-popup-countdown__box">' +
-        p.s +
-        "</span>";
+      if (labeled) {
+        wrap.className = "sce-popup-countdown sce-popup-countdown--labeled";
+        wrap.innerHTML =
+          unitHtml(p.d, "DAYS") +
+          '<span class="sce-popup-countdown__sep">:</span>' +
+          unitHtml(p.h, "HRS") +
+          '<span class="sce-popup-countdown__sep">:</span>' +
+          unitHtml(p.m, "MINS") +
+          '<span class="sce-popup-countdown__sep">:</span>' +
+          unitHtml(p.s, "SECS");
+      } else {
+        wrap.className = "sce-popup-countdown";
+        wrap.innerHTML =
+          '<span class="sce-popup-countdown__box">' +
+          p.d +
+          '</span><span class="sce-popup-countdown__sep">:</span><span class="sce-popup-countdown__box">' +
+          p.h +
+          '</span><span class="sce-popup-countdown__sep">:</span><span class="sce-popup-countdown__box">' +
+          p.m +
+          '</span><span class="sce-popup-countdown__sep">:</span><span class="sce-popup-countdown__box">' +
+          p.s +
+          "</span>";
+      }
     }
     tick();
     if (countdownTimer) clearInterval(countdownTimer);
@@ -185,9 +345,10 @@
   }
 
   function buildPopup(cfg) {
+    console.log("cfg=========>", cfg);
     if (!matchesConfigured(cfg)) return null;
     var designId = String(cfg.popupDesignId || "").trim();
-    if (!inThemeEditor && isDismissed(designId)) return null;
+    if (!inThemeEditor && isSuppressed(cfg)) return null;
 
     var overlay = document.createElement("div");
     overlay.className = "sce-popup-overlay";
@@ -207,7 +368,12 @@
 
     var modal = document.createElement("div");
     var lay = layoutMode(cfg);
-    modal.className = "sce-popup-modal sce-popup-modal--layout-" + lay.replace(/_/g, "-");
+    var vst = visualStyle(cfg);
+    modal.className =
+      "sce-popup-modal sce-popup-modal--layout-" +
+      lay.replace(/_/g, "-") +
+      " sce-popup-modal--style-" +
+      vst;
     if (cfg.modalTransparentShell === true) {
       modal.classList.add("sce-popup-modal--shell-ghost");
     }
@@ -218,6 +384,24 @@
     var mwp = Number(cfg.modalMaxWidthPx);
     if (!Number.isNaN(mwp) && mwp >= 280 && mwp <= 920) {
       modal.style.width = "min(" + String(Math.round(mwp)) + "px, 100%)";
+    }
+
+    var cpos = closeButtonPosition(cfg);
+    modal.classList.add("sce-popup-modal--close-" + cpos.replace(/_/g, "-"));
+
+    var modalBgUrl = safeImageUrl(cfg.modalBackgroundImageUrl);
+    if (modalBgUrl) {
+      var bgImg = document.createElement("img");
+      bgImg.className = "sce-popup-modal__bg-image";
+      bgImg.src = modalBgUrl;
+      var altBg = String(cfg.modalBackgroundImageAlt || "").trim();
+      bgImg.alt = altBg;
+      if (!altBg) bgImg.setAttribute("aria-hidden", "true");
+      bgImg.decoding = "async";
+      bgImg.loading = "lazy";
+      var bgFit = String(cfg.modalBackgroundImageFit || "cover").trim() === "contain" ? "contain" : "cover";
+      bgImg.style.objectFit = bgFit;
+      modal.appendChild(bgImg);
     }
 
     var left = null;
@@ -247,43 +431,136 @@
 
     var right = document.createElement("div");
     right.className = "sce-popup-right";
+    if (String((cfg || {}).contentAlign || "").trim() === "center") {
+      right.classList.add("sce-popup-right--align-center");
+    }
     right.style.setProperty("--sce-popup-right-bg", String(cfg.rightPanelBg || "#dbeaf8"));
     right.style.setProperty("--sce-popup-headline", String(cfg.headlineColor || "#0f172a"));
     right.style.setProperty("--sce-popup-sub", String(cfg.subheadlineColor || "#475569"));
     right.style.setProperty("--sce-popup-btn-bg", String(cfg.buttonBg || "#0f172a"));
     right.style.setProperty("--sce-popup-btn-fg", String(cfg.buttonText || "#ffffff"));
+    right.style.setProperty("--sce-popup-accent", String(cfg.accentGold || "#c9a227"));
     right.style.background = String(cfg.rightPanelBg || "#dbeaf8");
+
+    function redirectWithCapture(hrefBase, emailVal, nameVal) {
+      var url = hrefBase;
+      if (emailVal) {
+        var sep = hrefBase.indexOf("?") >= 0 ? "&" : "?";
+        url = hrefBase + sep + "email=" + encodeURIComponent(emailVal);
+        if (nameVal) url += "&first_name=" + encodeURIComponent(nameVal);
+      }
+      window.location.assign(url);
+    }
+
+    function mapPopupSignupError(data) {
+      if (!data || typeof data !== "object") return "Something went wrong. Please try again.";
+        if (data.error === "protected_customer_data") {
+          return "We can't complete your signup right now. Please try again later or contact the store.";
+        }
+      if (data.error === "session_missing" && data.message) return String(data.message);
+      if (data.error === "shopify_user_errors" && data.userErrors && data.userErrors[0] && data.userErrors[0].message) {
+        return String(data.userErrors[0].message);
+      }
+      if (data.error === "graphql" && data.messages && data.messages[0]) return String(data.messages[0]);
+      if (data.message === "email_required") return "Please enter your email address.";
+      if (data.message === "invalid_email") return "Please enter a valid email address.";
+      return "Something went wrong. Please try again.";
+    }
+
+    var mainCol = document.createElement("div");
+    mainCol.className = "sce-popup-main-col";
 
     var closeBtn = document.createElement("button");
     closeBtn.type = "button";
-    closeBtn.className = "sce-popup-close";
+    closeBtn.className = "sce-popup-close sce-popup-close--" + cpos.replace(/_/g, "-");
     closeBtn.setAttribute("aria-label", "Close");
     closeBtn.innerHTML = "&times;";
     closeBtn.addEventListener("click", function () {
-      markDismissed(designId);
+      if (overlay.dataset.sceBusySubmit === "1") return;
+      markDismissed(cfg);
       removePopup();
     });
 
+    var titleBadge = null;
+    if (cfg.showTitle !== false) {
+      titleBadge = document.createElement("div");
+      titleBadge.className = "sce-popup-title";
+      var badgeText = String(cfg.titleBadgeText || "\u2726 LIMITED OFFER").trim();
+      titleBadge.textContent = badgeText || "\u2726 LIMITED OFFER";
+    }
+
     var h1 = document.createElement("div");
     h1.className = "sce-popup-headline";
-    h1.textContent = String(cfg.headline || "");
+    var headStr = String(cfg.headline || "");
+    h1.textContent = headStr;
+    if (headStr.indexOf("\n") >= 0) {
+      h1.classList.add("sce-popup-headline--multiline");
+    }
 
     var sub = document.createElement("div");
     sub.className = "sce-popup-sub";
     sub.textContent = String(cfg.subheadline || "");
 
-    var cd = document.createElement("div");
-    cd.className = "sce-popup-countdown";
-    renderCountdownRow(cd, String(cfg.countdownEndAt || "").trim());
+    var bodyEl = null;
+    var bodyStr = String(cfg.bodyText || "").trim();
+    if (bodyStr) {
+      bodyEl = document.createElement("div");
+      bodyEl.className = "sce-popup-body";
+      bodyEl.textContent = bodyStr;
+    }
+
+    var cd = null;
+    if (cfg.showTiming !== false) {
+      cd = document.createElement("div");
+      cd.className = "sce-popup-countdown";
+      renderCountdownRow(cd, String(cfg.countdownEndAt || "").trim(), cfg);
+    }
+
+    var emailRow = null;
+    if (cfg.emailCaptureEnabled === true && cfg.showContent !== false) {
+      emailRow = document.createElement("div");
+      emailRow.className = "sce-popup-email-row";
+      var inEmail = document.createElement("input");
+      inEmail.type = "email";
+      inEmail.className = "sce-popup-input sce-popup-input--email";
+      inEmail.setAttribute("autocomplete", "email");
+      inEmail.placeholder = String(cfg.emailPlaceholder || "Enter your email");
+      emailRow.appendChild(inEmail);
+      var emailErr = document.createElement("div");
+      emailErr.className = "sce-popup-email-error";
+      emailErr.style.display = "none";
+      emailErr.setAttribute("role", "alert");
+      emailRow.appendChild(emailErr);
+      function clearEmailError() {
+        emailErr.textContent = "";
+        emailErr.style.display = "none";
+        inEmail.classList.remove("sce-popup-input--invalid");
+      }
+      function showEmailError(msg) {
+        emailErr.textContent = msg;
+        emailErr.style.display = "block";
+        inEmail.classList.add("sce-popup-input--invalid");
+        try {
+          inEmail.focus();
+        } catch (_f) {}
+      }
+      inEmail.addEventListener("input", clearEmailError);
+      inEmail.addEventListener("change", clearEmailError);
+      emailRow.__sceClearEmailErr = clearEmailError;
+      emailRow.__sceShowEmailErr = showEmailError;
+    }
 
     var couponCodeStr = String(cfg.couponCode || "").trim();
     var couponRow = null;
-    if (couponCodeStr) {
+    if (couponCodeStr && cfg.showContent !== false) {
       couponRow = document.createElement("div");
       couponRow.className = "sce-popup-coupon-row";
 
       var coupon = document.createElement("div");
       coupon.className = "sce-popup-coupon";
+      if (String((cfg || {}).couponVariant || "").trim() === "ticket") {
+        coupon.classList.add("sce-popup-coupon--ticket");
+      }
       coupon.textContent = couponCodeStr;
 
       var copyBtn = document.createElement("button");
@@ -309,43 +586,606 @@
       couponRow.appendChild(copyBtn);
     }
 
+    var successBox = null;
+    if (
+      cfg.shopifyCustomerCreateEnabled === true &&
+      cfg.emailCaptureEnabled === true &&
+      cfg.showContent !== false
+    ) {
+      successBox = document.createElement("div");
+      successBox.className = "sce-popup-success";
+      successBox.style.display = "none";
+      successBox.setAttribute("role", "status");
+      var succImgSrc = safeImageUrl(cfg.customerCreateSuccessImageUrl);
+      if (succImgSrc) {
+        var sImg = document.createElement("img");
+        sImg.className = "sce-popup-success__img";
+        sImg.src = succImgSrc;
+        sImg.alt = "";
+        sImg.decoding = "async";
+        sImg.loading = "lazy";
+        successBox.appendChild(sImg);
+      }
+      var sMsg = document.createElement("div");
+      sMsg.className = "sce-popup-success__msg";
+      sMsg.textContent = String(cfg.customerCreateSuccessMessage || "You are subscribed. Thank you!");
+      successBox.appendChild(sMsg);
+      var sBtn = document.createElement("button");
+      sBtn.type = "button";
+      sBtn.className = "sce-popup-success__btn sce-popup-cta";
+      sBtn.textContent = String(cfg.ctaHref || "").trim() ? "Continue" : "Close";
+      successBox.appendChild(sBtn);
+    }
+
     var cta = document.createElement("button");
     cta.type = "button";
     cta.className = "sce-popup-cta";
     cta.textContent = String(cfg.ctaText || "Continue shopping");
     cta.addEventListener("click", function () {
       var href = String(cfg.ctaHref || "").trim();
+      var cap = cfg.emailCaptureEnabled === true;
+      var wantSignup = cfg.subscriberSignupEnabled === true;
+      var wantCustomer = cfg.shopifyCustomerCreateEnabled === true;
+      var needsServer = Boolean(apiUrl && (wantSignup || wantCustomer));
+      var stayInPopup = wantCustomer && cfg.customerCreateStayInPopup !== false;
+
+      function parseProxyJsonBody(text) {
+        console.log("text=========>", text);
+        var raw = String(text || "").replace(/^\uFEFF/, "").trim();
+        if (!raw) return { data: null, parseOk: false };
+        function tryParse(s) {
+          try {
+            var parsed = JSON.parse(s);
+            if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+              return { data: parsed, parseOk: true };
+            }
+          } catch (_e) {
+            /* ignore */
+          }
+          return null;
+        }
+        var direct = tryParse(raw);
+        if (direct) return direct;
+        var start = raw.indexOf("{");
+        var end = raw.lastIndexOf("}");
+        if (start >= 0 && end > start) {
+          var sliced = tryParse(raw.slice(start, end + 1));
+          if (sliced) return sliced;
+        }
+        return { data: null, parseOk: false };
+      }
+
+      /**
+       * When proxies strip custom headers or mangle JSON, the raw body may still contain our success shape.
+       * Intentionally substring-based (not a full parse) so truncated bodies can still signal success.
+       */
+      function bodyLooksLikePopupSubscribeSuccess(rawText) {
+        var s = String(rawText || "").replace(/^\uFEFF/, "");
+        if (s.length < 10) return false;
+        if (!/["']ok["']\s*:\s*true/.test(s)) return false;
+        return (
+          /["']subscriberCount["']\s*:/.test(s) ||
+          /["']alreadyCustomer["']\s*:/.test(s) ||
+          /["']alreadySignedUp["']\s*:/.test(s) ||
+          /["']customer["']\s*:/.test(s)
+        );
+      }
+
+      function postSignupJson(body) {
+        console.log("apiUrl=========>", apiUrl);
+        console.log("body=========>", body);
+        return fetch(apiUrl, {
+          method: "POST",
+          credentials: "same-origin",
+          cache: "no-store",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(body),
+        }).then(function (r) {
+          console.log("r=========>", r);
+          var headerSubscribeOk =
+            r.ok &&
+            String(r.headers.get("X-Sce-Popup-Subscribe") || "")
+              .trim()
+              .toLowerCase() === "ok";
+          return r.text().then(function (t) {
+            console.log("t=========>", t);
+            var parsed = parseProxyJsonBody(t);
+            console.log("parsed=========>", parsed);
+            var bodyLooksSubscribeOk = r.ok && bodyLooksLikePopupSubscribeSuccess(t);
+            return {
+              httpOk: r.ok,
+              data: parsed.data,
+              parseOk: parsed.parseOk,
+              headerSubscribeOk: headerSubscribeOk,
+              bodyLooksSubscribeOk: bodyLooksSubscribeOk,
+            };
+          });
+        });
+      }
+
+      /** App-proxy GET verify (loader) — avoids POST-only failures on some setups. */
+      function getVerifyCustomerJson(emailForVerify) {
+        var sep = apiUrl.indexOf("?") >= 0 ? "&" : "?";
+        var u =
+          apiUrl +
+          sep +
+          "intent=verify_customer&email=" +
+          encodeURIComponent(String(emailForVerify || "").trim());
+        return fetch(u, {
+          method: "GET",
+          credentials: "same-origin",
+          cache: "no-store",
+          headers: { Accept: "application/json" },
+        }).then(function (r) {
+          return r.text().then(function (t) {
+            var parsed = parseProxyJsonBody(t);
+            return { httpOk: r.ok, data: parsed.data, parseOk: parsed.parseOk };
+          });
+        });
+      }
+
+      function showSuccessUI(alreadyCust, emailVal, nameVal) {
+        try {
+          if (overlay && overlay.__sceAutoCloseTimer) {
+            clearTimeout(overlay.__sceAutoCloseTimer);
+            overlay.__sceAutoCloseTimer = null;
+          }
+        } catch (_x) {}
+        if (successBox && mainCol) {
+          mainCol.style.display = "none";
+          successBox.style.display = "flex";
+          var msgEl = successBox.querySelector(".sce-popup-success__msg");
+          if (msgEl) {
+            var base = String(cfg.customerCreateSuccessMessage || "You are subscribed. Thank you!");
+            if (alreadyCust) {
+              msgEl.textContent =
+                base +
+                " This email was already registered — you are subscribed.";
+            } else {
+              msgEl.textContent = base;
+            }
+          }
+          var btn = successBox.querySelector(".sce-popup-success__btn");
+          if (btn) {
+            btn.textContent = href ? "Continue" : "Close";
+            btn.onclick = function () {
+              try {
+                if (overlay && overlay.__sceAutoCloseTimer) {
+                  clearTimeout(overlay.__sceAutoCloseTimer);
+                  overlay.__sceAutoCloseTimer = null;
+                }
+              } catch (_y) {}
+              if (href) redirectWithCapture(href, emailVal, nameVal);
+              else {
+                markDismissed(cfg);
+                removePopup();
+              }
+            };
+          }
+          /** After success, auto-dismiss when there is no CTA URL (optional brief success, then close). */
+          var autoCloseMs = 2600;
+          try {
+            var n = Number(cfg.customerCreateSuccessAutoCloseMs);
+            if (n >= 0 && n < 120000) autoCloseMs = n;
+          } catch (_ac) {}
+          if (!href && overlay) {
+            overlay.__sceAutoCloseTimer = setTimeout(function () {
+              overlay.__sceAutoCloseTimer = null;
+              markDismissed(cfg);
+              removePopup();
+            }, autoCloseMs);
+          }
+        } else if (href) {
+          redirectWithCapture(href, emailVal, nameVal);
+        } else {
+          markDismissed(cfg);
+          removePopup();
+        }
+      }
+
+      /** Success after we could not read the subscribe response but confirmed the customer exists (e.g. proxy dropped body). */
+      function applySubscribeSuccessAfterCustomerVerified(emailVal, nameVal) {
+        applySubscribeSuccess({ ok: true, alreadyCustomer: false }, emailVal, nameVal);
+      }
+
+      function applySubscribeSuccess(data, emailVal, nameVal) {
+        if (data && typeof data.subscriberCount === "number") {
+          try {
+            cfg.subscriberCount = data.subscriberCount;
+          } catch (_c) {}
+        }
+        var alreadyCust = data && data.alreadyCustomer === true;
+        if (stayInPopup) {
+          showSuccessUI(!!alreadyCust, emailVal, nameVal);
+        } else if (href) {
+          redirectWithCapture(href, emailVal, nameVal);
+        } else {
+          showSuccessUI(!!alreadyCust, emailVal, nameVal);
+        }
+      }
+
+      function setCtaLoading(loading) {
+        try {
+          if (emIn) emIn.disabled = !!loading;
+          if (closeBtn) closeBtn.disabled = !!loading;
+          if (overlay) overlay.dataset.sceBusySubmit = loading ? "1" : "0";
+        } catch (_dis) {}
+        if (!cta) return;
+        if (loading) {
+          if (!cta.dataset.sceOrigLabel) cta.dataset.sceOrigLabel = cta.textContent;
+          cta.disabled = true;
+          cta.classList.add("sce-popup-cta--loading");
+          cta.textContent = "Subscribing...";
+        } else {
+          cta.disabled = false;
+          cta.classList.remove("sce-popup-cta--loading");
+          if (cta.dataset.sceOrigLabel) cta.textContent = cta.dataset.sceOrigLabel;
+        }
+      }
+
+      if (cap) {
+        var emIn = emailRow && emailRow.querySelector(".sce-popup-input--email");
+        var emailVal = emIn ? String(emIn.value || "").trim() : "";
+        var clearErr = emailRow && emailRow.__sceClearEmailErr;
+        var showErr = emailRow && emailRow.__sceShowEmailErr;
+        if (typeof clearErr === "function") clearErr();
+        if (!emailVal) {
+          if (typeof showErr === "function") showErr("Please enter your email address.");
+          return;
+        }
+        if (!isValidEmailForCapture(emailVal)) {
+          if (typeof showErr === "function") showErr("Please enter a valid email address.");
+          return;
+        }
+        var nameVal = "";
+
+        if (needsServer) {
+          if (cta.dataset.sceSubmitting === "1") return;
+          cta.dataset.sceSubmitting = "1";
+          setCtaLoading(true);
+
+          var payload = { email: emailVal };
+
+          function done() {
+            setCtaLoading(false);
+            cta.dataset.sceSubmitting = "0";
+          }
+
+          /** When the server returned a definitive failure, do not poll customer search. */
+          function signupErrorMeansSkipCustomerRecovery(data) {
+            if (!data || typeof data !== "object") return false;
+            var e = data.error;
+            return (
+              e === "validation" ||
+              e === "invalid_json" ||
+              e === "popup_not_found" ||
+              e === "popup_design_id_required" ||
+              e === "email_capture_disabled" ||
+              e === "signup_disabled" ||
+              e === "verify_disabled" ||
+              e === "session_missing" ||
+              e === "method_not_allowed" ||
+              e === "missing_shop" ||
+              e === "shopify_user_errors" ||
+              e === "protected_customer_data"
+            );
+          }
+
+          function userErrorsIndicateEmailAlreadyTaken(userErrors) {
+            if (!Array.isArray(userErrors) || !userErrors.length) return false;
+            return userErrors.some(function (err) {
+              var m = String((err && err.message) || "").toLowerCase();
+              return (
+                m.includes("taken") ||
+                m.includes("already") ||
+                m.includes("exist") ||
+                m.includes("duplicate") ||
+                m.includes("in use") ||
+                m.includes("registered") ||
+                m.includes("identical")
+              );
+            });
+          }
+
+          /** Allow another POST when Shopify returns userErrors for duplicate email (next request returns ok:true). */
+          function signupErrorStopsSubscribeRetry(data) {
+            if (!data || typeof data !== "object") return false;
+            if (
+              wantCustomer &&
+              data.error === "shopify_user_errors" &&
+              userErrorsIndicateEmailAlreadyTaken(data.userErrors)
+            ) {
+              return false;
+            }
+            return signupErrorMeansSkipCustomerRecovery(data);
+          }
+
+          function verifyResponseLooksFound(wv) {
+            if (!wv || !wv.data || wv.data.ok !== true) return false;
+            if (wv.data.found === true) return true;
+            var c = wv.data.customer;
+            if (c && (c.id || c.email)) return true;
+            return false;
+          }
+
+          /** One round: GET verify (loader), then POST verify (action) if still not found. */
+          function fetchVerifyOnce() {
+            return getVerifyCustomerJson(emailVal)
+              .catch(function () {
+                return { httpOk: false, data: null, parseOk: false };
+              })
+              .then(function (wv) {
+                if (verifyResponseLooksFound(wv)) return wv;
+                return postSignupJson({
+                  intent: "verify_customer",
+                  email: emailVal,
+                })
+                  .catch(function () {
+                    return { httpOk: false, data: null, parseOk: false };
+                  })
+                  .then(function (wv2) {
+                    return verifyResponseLooksFound(wv2) ? wv2 : wv;
+                  });
+              });
+          }
+
+          /** Shopify search can lag after customerCreate; proxies may drop the POST body while the create still succeeds. */
+          function tryVerifyRecovery() {
+            if (!wantCustomer) return Promise.resolve(false);
+            var waits = [0, 400, 900, 1700, 3000, 5000, 8000, 12000];
+            var idx = 0;
+            function attempt() {
+              if (idx >= waits.length) return Promise.resolve(false);
+              var ms = waits[idx];
+              idx += 1;
+              return new Promise(function (resolve) {
+                setTimeout(resolve, ms);
+              }).then(function () {
+                return fetchVerifyOnce().then(function (wv) {
+                  if (verifyResponseLooksFound(wv)) {
+                    applySubscribeSuccessAfterCustomerVerified(emailVal, nameVal);
+                    return true;
+                  }
+                  return attempt();
+                });
+              });
+            }
+            return attempt();
+          }
+
+          function genericSubscribeFailureMessage() {
+            if (wantCustomer) {
+              return "Something went wrong. Please try again in a moment.";
+            }
+            return "Something went wrong. Please try again.";
+          }
+
+          /**
+           * Re-post a few times with backoff: first response is often empty/truncated while Shopify still
+           * creates the customer; the next POST hits duplicate-email and returns parseable JSON.
+           */
+          function postSubscribeWithRetries(body, maxAttempts) {
+            function attempt(n) {
+              return postSignupJson(body).then(function (w) {
+                if (w && w.data && signupErrorStopsSubscribeRetry(w.data)) {
+                  return w;
+                }
+                var duplicateShopifyUserErr =
+                  wantCustomer &&
+                  w &&
+                  w.parseOk &&
+                  w.data &&
+                  w.data.error === "shopify_user_errors" &&
+                  userErrorsIndicateEmailAlreadyTaken(w.data.userErrors);
+                var looksOk =
+                  duplicateShopifyUserErr ||
+                  (w &&
+                    w.httpOk &&
+                    (w.headerSubscribeOk ||
+                      w.bodyLooksSubscribeOk ||
+                      (w.parseOk && w.data && w.data.ok === true)));
+                if (looksOk) return w;
+                if (n >= maxAttempts) return w;
+                return new Promise(function (resolve) {
+                  setTimeout(resolve, 550);
+                }).then(function () {
+                  return attempt(n + 1);
+                });
+              });
+            }
+            return attempt(1);
+          }
+
+          function finishSubscribeSuccess(data) {
+            console.log("data=========>", data);
+            done();
+            if (typeof clearErr === "function") clearErr();
+            applySubscribeSuccess(data, emailVal, nameVal);
+          }
+
+          postSubscribeWithRetries(payload, 4).then(function (w) {
+              if (w && w.httpOk && w.parseOk && w.data && w.data.ok === true) {
+                finishSubscribeSuccess(w.data);
+                return;
+              }
+              if (
+                wantCustomer &&
+                w &&
+                w.parseOk &&
+                w.data &&
+                w.data.error === "shopify_user_errors" &&
+                userErrorsIndicateEmailAlreadyTaken(w.data.userErrors)
+              ) {
+                finishSubscribeSuccess({ ok: true, alreadyCustomer: true });
+                return;
+              }
+              if (w && w.httpOk && (w.headerSubscribeOk || w.bodyLooksSubscribeOk)) {
+                finishSubscribeSuccess(
+                  w.parseOk && w.data && w.data.ok === true ? w.data : { ok: true, alreadyCustomer: false },
+                );
+                return;
+              }
+              if (!(w && w.data)) {
+                return tryVerifyRecovery().then(function (recovered) {
+                  done();
+                  if (recovered) return;
+                  if (wantSignup && !wantCustomer && w && w.httpOk) {
+                    finishSubscribeSuccess({ ok: true });
+                    return;
+                  }
+                  if (
+                    wantCustomer &&
+                    w &&
+                    w.parseOk &&
+                    w.data &&
+                    w.data.error === "shopify_user_errors" &&
+                    userErrorsIndicateEmailAlreadyTaken(w.data.userErrors)
+                  ) {
+                    finishSubscribeSuccess({ ok: true, alreadyCustomer: true });
+                    return;
+                  }
+                  if (typeof showErr === "function") {
+                    showErr(genericSubscribeFailureMessage());
+                  }
+                });
+              }
+              if (w.data && signupErrorMeansSkipCustomerRecovery(w.data)) {
+                done();
+                if (
+                  wantCustomer &&
+                  w.data.error === "shopify_user_errors" &&
+                  userErrorsIndicateEmailAlreadyTaken(w.data.userErrors)
+                ) {
+                  if (typeof clearErr === "function") clearErr();
+                  applySubscribeSuccess({ ok: true, alreadyCustomer: true }, emailVal, nameVal);
+                  return;
+                }
+                if (typeof showErr === "function") showErr(mapPopupSignupError(w.data));
+                return;
+              }
+              if (wantCustomer && w.httpOk && w.data && w.data.ok !== true) {
+                return tryVerifyRecovery().then(function (recovered) {
+                  done();
+                  if (!recovered && typeof showErr === "function") {
+                    if (
+                      w.data &&
+                      w.data.error === "shopify_user_errors" &&
+                      userErrorsIndicateEmailAlreadyTaken(w.data.userErrors)
+                    ) {
+                      if (typeof clearErr === "function") clearErr();
+                      applySubscribeSuccess({ ok: true, alreadyCustomer: true }, emailVal, nameVal);
+                    } else {
+                      showErr(mapPopupSignupError(w.data));
+                    }
+                  }
+                });
+              }
+              if (!w.parseOk || w.data === null) {
+                return tryVerifyRecovery().then(function (recovered) {
+                  done();
+                  if (recovered) return;
+                  if (wantSignup && !wantCustomer && w.httpOk) {
+                    finishSubscribeSuccess({ ok: true });
+                    return;
+                  }
+                  if (typeof showErr === "function") {
+                    showErr(genericSubscribeFailureMessage());
+                  }
+                });
+              }
+              if (wantCustomer && w.data && w.data.ok !== true && !w.httpOk) {
+                return tryVerifyRecovery().then(function (recovered) {
+                  done();
+                  if (!recovered && typeof showErr === "function") {
+                    showErr(genericSubscribeFailureMessage());
+                  }
+                });
+              }
+              done();
+              if (typeof showErr === "function") showErr(mapPopupSignupError(w.data));
+            })
+            .catch(function () {
+              tryVerifyRecovery().then(function (recovered) {
+                done();
+                if (!recovered && typeof showErr === "function") {
+                  showErr(genericSubscribeFailureMessage());
+                }
+              });
+            });
+          return;
+        }
+
+        if (href) {
+          redirectWithCapture(href, emailVal, nameVal);
+          return;
+        }
+        markDismissed(cfg);
+        removePopup();
+        return;
+      }
       if (href) {
         window.location.assign(href);
       } else {
-        markDismissed(designId);
+        markDismissed(cfg);
         removePopup();
       }
     });
 
-    right.appendChild(closeBtn);
+    var footnote = null;
+    if (cfg.showDismissFootnote !== false) {
+      var footText = String(cfg.dismissFootnoteText || "").trim();
+      if (footText) {
+        footnote = document.createElement("div");
+        footnote.className = "sce-popup-footnote";
+        footnote.textContent = footText;
+      }
+    }
+
+    if (titleBadge) right.appendChild(titleBadge);
+    right.appendChild(mainCol);
     if (cfg.showHeadline !== false) {
-      right.appendChild(h1);
+      mainCol.appendChild(h1);
     }
     if (cfg.showSubheadline !== false) {
-      right.appendChild(sub);
+      mainCol.appendChild(sub);
     }
-    right.appendChild(cd);
-    if (couponRow) {
-      right.appendChild(couponRow);
+    if (bodyEl) {
+      mainCol.appendChild(bodyEl);
     }
-    right.appendChild(cta);
+    if (cd) {
+      mainCol.appendChild(cd);
+    }
+    if (emailRow) {
+      mainCol.appendChild(emailRow);
+    }
+    if (cfg.showContent !== false && couponRow) {
+      mainCol.appendChild(couponRow);
+    }
+    if (cfg.showContent !== false) {
+      mainCol.appendChild(cta);
+    }
+    if (footnote) {
+      mainCol.appendChild(footnote);
+    }
+    if (successBox) {
+      right.appendChild(successBox);
+    }
 
     if (left) {
       modal.appendChild(left);
     }
     modal.appendChild(right);
+    modal.appendChild(closeBtn);
 
     overlay.appendChild(backdrop);
     overlay.appendChild(modal);
 
     backdrop.addEventListener("click", function () {
-      markDismissed(designId);
+      if (overlay.dataset.sceBusySubmit === "1") return;
+      markDismissed(cfg);
       removePopup();
     });
     modal.addEventListener("click", function (e) {
@@ -363,6 +1203,8 @@
     rootEl = el;
     document.body.appendChild(el);
     document.addEventListener("keydown", onKeydown);
+    var id = String((cfg || {}).popupDesignId || "").trim();
+    if (id && !inThemeEditor) bumpImpressionCount(id);
   }
 
   function scheduleShow(cfg) {
@@ -372,6 +1214,7 @@
     }
     removePopup();
     var delay = Math.max(0, Number(cfg.showDelayMs || 0) || 0);
+    if (String(cfg.displayTrigger || "") === "on_load") delay = 0;
     if (inThemeEditor) delay = Math.min(delay, 400);
     pendingShowTimeout = setTimeout(function () {
       pendingShowTimeout = null;
@@ -381,7 +1224,11 @@
 
   function refresh() {
     if (!apiUrl) return;
-    fetch(apiUrl, { credentials: "same-origin", headers: { Accept: "application/json" } })
+    fetch(apiUrl, {
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    })
       .then(function (r) {
         return r.json().then(function (data) {
           return { status: r.status, data: data };
@@ -394,13 +1241,24 @@
         }
         var data = wrapped.data;
         var cfg = data.config || {};
+        if (typeof data.subscriberCount === "number") {
+          cfg.subscriberCount = data.subscriberCount;
+        }
         if (!matchesConfigured(cfg)) {
           removePopup();
           return;
         }
         var nextVersion = String(data.version || "");
-        if (nextVersion && nextVersion === lastRenderVersion) return;
-        lastRenderVersion = nextVersion;
+        var pathKey = String(window.location.pathname || "");
+        var pageOk = matchesPageTarget(cfg) ? "1" : "0";
+        var sup = isSuppressed(cfg) ? "1" : "0";
+        var tickSig = nextVersion + "|" + pathKey + "|" + pageOk + sup;
+        if (tickSig === lastTickSig) return;
+        lastTickSig = tickSig;
+        if (pageOk !== "1" || sup === "1") {
+          removePopup();
+          return;
+        }
         scheduleShow(cfg);
       })
       .catch(function () {});

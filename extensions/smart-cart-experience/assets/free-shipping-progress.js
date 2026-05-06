@@ -1,6 +1,33 @@
 (function () {
   var script = document.currentScript;
+  if (!script) {
+    var scopedScripts = document.querySelectorAll('script[src*="free-shipping-progress.js"]');
+    if (scopedScripts && scopedScripts.length) {
+      script = scopedScripts[scopedScripts.length - 1];
+    }
+  }
   if (!script) return;
+  var rawInstanceKey =
+    (script.dataset.instanceId ||
+      script.dataset.blockId ||
+      script.dataset.sectionId ||
+      script.getAttribute("data-section-id") ||
+      script.id ||
+      script.src ||
+      "sce-default-instance");
+  var instanceKey = String(rawInstanceKey).trim() || "sce-default-instance";
+  var globalInstances = (window.__sceShippingProgressInstances =
+    window.__sceShippingProgressInstances || {});
+  if (
+    globalInstances[instanceKey] &&
+    typeof globalInstances[instanceKey].teardown === "function"
+  ) {
+    try {
+      globalInstances[instanceKey].teardown();
+    } catch (_) {
+      /* ignore previous teardown failure */
+    }
+  }
 
   var thresholdValue = Number(script.dataset.threshold || 0);
   var shippingChargeValue = Number(script.dataset.shippingCharge || 0);
@@ -27,6 +54,36 @@
     script.dataset.sequentialHintZero || "Progress: 0% — unlock Tier 1 to start.";
   var sequentialHintMid =
     script.dataset.sequentialHintMid || "Progress: 50% — unlock Tier 2 for free shipping.";
+  var tier1Icon = script.dataset.tier1Icon || "%";
+  var tier2Icon = script.dataset.tier2Icon || "🚚";
+  var subtotalLabel = script.dataset.subtotalLabel || "Current subtotal";
+  var estimatedShippingLabel = script.dataset.estimatedShippingLabel || "Estimated shipping";
+  var widgetBackgroundColor = script.dataset.widgetBackgroundColor || "#ffffff";
+  var widgetTextColor = script.dataset.widgetTextColor || "#111827";
+  var widgetBorderColor = script.dataset.widgetBorderColor || "#d1d5db";
+  var widgetUseCustomColors = String(script.dataset.widgetUseCustomColors || "").toLowerCase() === "true";
+  var tier1LabelText = script.dataset.tier1LabelText || "Discount";
+  var tier2LabelText = script.dataset.tier2LabelText || "Free shipping";
+  var minAmountPrefixText = script.dataset.minAmountPrefixText || "Min.";
+  var showTierIcons = String(script.dataset.showTierIcons || "true").toLowerCase() !== "false";
+  var showTierLabels = String(script.dataset.showTierLabels || "true").toLowerCase() !== "false";
+  var showTierMinimums = String(script.dataset.showTierMinimums || "true").toLowerCase() !== "false";
+  var showHeading = true;
+  var showSubheading = true;
+  var showTier1Heading = true;
+  var showTier1Subheading = true;
+  var showTier2Heading = true;
+  var showTier2Subheading = true;
+  var showHint = true;
+  var barFillColor = "#166534";
+  var barTrackColor = "#cbd5e1";
+  var iconBackgroundColor = "#166534";
+  var iconTextColor = "#ffffff";
+  var headingColor = "#0f172a";
+  var subheadingColor = "#334155";
+  var tierHeadingColor = "#0f172a";
+  var tierSubheadingColor = "#334155";
+  var hintColor = "#64748b";
   var sequentialMsg0 =
     script.dataset.sequentialMsg0 ||
     "Unlock Tier 1 to apply your cart discount. Then unlock Tier 2 for free shipping.";
@@ -100,7 +157,7 @@
     "cart-drawer",
     "#CartDrawer",
     ".ajaxcart",
-    "form[action='/cart']",
+    "form[action*='/cart']",
     ".cart__blocks"
   ];
   var parsedNameTargets = (script.dataset.nameTargets || "").split(",").map(function (s) {
@@ -115,15 +172,33 @@
     ".cart-drawer__content",
     "cart-drawer",
     "[id*='CartDrawer']",
-    "form[action='/cart']",
+    "[id*='cart']",
+    "form[action*='/cart']",
     ".cart__blocks",
+    ".cart__contents",
   ];
-  if (!selectorTargets.length) {
-    selectorTargets = defaultWidgetTargets.slice();
+  function withDefaultWidgetTargets(targets) {
+    var merged = [];
+    (targets || []).forEach(function (t) {
+      var v = String(t || "").trim();
+      if (v && merged.indexOf(v) === -1) merged.push(v);
+    });
+    defaultWidgetTargets.forEach(function (t) {
+      if (merged.indexOf(t) === -1) merged.push(t);
+    });
+    return merged;
   }
+  selectorTargets = withDefaultWidgetTargets(selectorTargets);
 
   var logUrl = (script.dataset.logUrl || "").trim();
   var logEnabled = String(script.dataset.logEnabled || "").toLowerCase() === "true";
+
+  /** Stable per app-block/embed instance so reruns can cleanly reuse same mounts. */
+  var injectionScopeId = "sce_" + instanceKey.replace(/[^a-zA-Z0-9_-]/g, "_").slice(-48);
+  /** single (default): keep only one host. multi: render to every matched host. */
+  var widgetMountMode = String(script.dataset.widgetMountMode || "single").toLowerCase();
+  var allowMultipleWidgetHosts =
+    widgetMountMode === "multi" || widgetMountMode === "all" || widgetMountMode === "many";
 
   if (dynamicTierMode) {
     // Dynamic tiers use a 2-step milestone UI without manual unlock buttons.
@@ -134,7 +209,12 @@
   var isApplyingChanges = false;
   var lastUpdateAt = 0;
   var lastPostedCartSig = "";
+  var lastTierFetchSig = "";
+  var lastTierFetchAt = 0;
+  var lastDynamicCartSig = "";
+  var lastDynamicSyncAt = 0;
   var logPostTimer;
+  var pollIntervalId = null;
 
   function uniqueElements(list) {
     var unique = [];
@@ -143,6 +223,30 @@
       if (unique.indexOf(item) === -1) unique.push(item);
     });
     return unique;
+  }
+
+  function safeMatchesSelector(el, selector) {
+    if (!el || !(el instanceof Element) || !selector) return false;
+    try {
+      return el.matches(selector);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function elementTouchesAnyTarget(el, selectors) {
+    if (!el || !(el instanceof Element) || !Array.isArray(selectors) || !selectors.length) return false;
+    for (var i = 0; i < selectors.length; i += 1) {
+      var sel = selectors[i];
+      if (!sel) continue;
+      if (safeMatchesSelector(el, sel)) return true;
+      try {
+        if (el.querySelector(sel)) return true;
+      } catch (_) {
+        // ignore invalid selectors coming from settings
+      }
+    }
+    return false;
   }
 
   function safeFetchJson(url) {
@@ -185,42 +289,134 @@
     var t2 = active.length > 1 ? active[1] : null;
     if (t1) {
       var r1 = String(t1.rewardType || "").toUpperCase();
-      tier1Label = r1 === "FREE_SHIPPING" ? "Free shipping" : "Discount";
-      tier1TagText =
+      var v1 = Number(t1.discountPercent || 0);
+      tier1Label =
         r1 === "FREE_SHIPPING"
           ? "Free shipping"
-          : (Number(t1.discountPercent || 0) > 0 ? String(Number(t1.discountPercent || 0).toFixed(0)) + "% OFF" : "Discount");
+          : r1 === "FIXED_AMOUNT"
+            ? "Fixed discount"
+            : "Discount";
+      if (r1 === "FREE_SHIPPING") {
+        tier1TagText = "Free shipping";
+      } else if (r1 === "FIXED_AMOUNT") {
+        tier1TagText =
+          v1 > 0
+            ? formatMoney(majorUnitsToCartMinor(v1, currencyExponentAtBoot)) + " OFF"
+            : "Fixed amount";
+      } else {
+        tier1TagText = v1 > 0 ? String(v1.toFixed(0)) + "% OFF" : "Discount";
+      }
     }
     if (t2) {
       var r2 = String(t2.rewardType || "").toUpperCase();
-      tier2Label = r2 === "FREE_SHIPPING" ? "Free shipping" : "Discount";
-      tier2TagText =
+      var v2 = Number(t2.discountPercent || 0);
+      tier2Label =
         r2 === "FREE_SHIPPING"
           ? "Free shipping"
-          : (Number(t2.discountPercent || 0) > 0 ? String(Number(t2.discountPercent || 0).toFixed(0)) + "% OFF" : "Discount");
+          : r2 === "FIXED_AMOUNT"
+            ? "Fixed discount"
+            : "Discount";
+      if (r2 === "FREE_SHIPPING") {
+        tier2TagText = "Free shipping";
+      } else if (r2 === "FIXED_AMOUNT") {
+        tier2TagText =
+          v2 > 0
+            ? formatMoney(majorUnitsToCartMinor(v2, currencyExponentAtBoot)) + " OFF"
+            : "Fixed amount";
+      } else {
+        tier2TagText = v2 > 0 ? String(v2.toFixed(0)) + "% OFF" : "Discount";
+      }
     }
   }
 
   function refreshDynamicTiersWithCart(cart) {
     if (!dynamicTierMode || !logUrl) return Promise.resolve(false);
     var subtotalCents = getCartSubtotalCents(cart);
+    var cur = cart && cart.currency ? String(cart.currency).trim() : "";
+    var fetchSig = String(subtotalCents || 0) + "_" + cur;
+    var now = Date.now();
+    // Prevent request storms when observers/events fire repeatedly with same cart snapshot.
+    if (fetchSig === lastTierFetchSig && now - lastTierFetchAt < 1500) {
+      return Promise.resolve(false);
+    }
+    lastTierFetchSig = fetchSig;
+    lastTierFetchAt = now;
     var url = logUrl;
     if (url.indexOf("?") === -1) url += "?";
     else url += "&";
     url += "subtotalCents=" + encodeURIComponent(String(subtotalCents || 0));
-    var cur = cart && cart.currency ? String(cart.currency).trim() : "";
     if (cur) url += "&currency=" + encodeURIComponent(cur);
     return safeFetchJson(url).then(function (data) {
       if (!data || !data.ok) return false;
+      if (data.sequentialMsg0) sequentialMsg0 = String(data.sequentialMsg0);
+      if (data.sequentialMsg1) sequentialMsg1 = String(data.sequentialMsg1);
+      if (data.sequentialMsg2) sequentialMsg2 = String(data.sequentialMsg2);
+      if (data.sequentialHintZero) sequentialHintZero = String(data.sequentialHintZero);
+      if (data.sequentialHintMid) sequentialHintMid = String(data.sequentialHintMid);
+      if (data.tier1Icon) tier1Icon = String(data.tier1Icon);
+      if (data.tier2Icon) tier2Icon = String(data.tier2Icon);
+      if (data.subtotalLabel) subtotalLabel = String(data.subtotalLabel);
+      if (data.estimatedShippingLabel)
+        estimatedShippingLabel = String(data.estimatedShippingLabel);
+      if (data.widgetBackgroundColor) widgetBackgroundColor = String(data.widgetBackgroundColor);
+      if (data.widgetTextColor) widgetTextColor = String(data.widgetTextColor);
+      if (data.widgetBorderColor) widgetBorderColor = String(data.widgetBorderColor);
+      widgetUseCustomColors = Boolean(data.widgetUseCustomColors);
+      if (data.tier1LabelText) tier1LabelText = String(data.tier1LabelText);
+      if (data.tier2LabelText) tier2LabelText = String(data.tier2LabelText);
+      if (data.minAmountPrefixText) minAmountPrefixText = String(data.minAmountPrefixText);
+      showTierIcons = data.showTierIcons !== false;
+      showTierLabels = data.showTierLabels !== false;
+      showTierMinimums = data.showTierMinimums !== false;
+      var dynamic = data.widgetDynamicConfig;
+      if (dynamic && typeof dynamic === "object") {
+        showHeading = dynamic.showHeading !== false;
+        showSubheading = dynamic.showSubheading !== false;
+        showTier1Heading = dynamic.showTier1Heading !== false;
+        showTier1Subheading = dynamic.showTier1Subheading !== false;
+        showTier2Heading = dynamic.showTier2Heading !== false;
+        showTier2Subheading = dynamic.showTier2Subheading !== false;
+        showHint = dynamic.showHint !== false;
+        if (dynamic.barFillColor) barFillColor = String(dynamic.barFillColor);
+        if (dynamic.barTrackColor) barTrackColor = String(dynamic.barTrackColor);
+        if (dynamic.iconBackgroundColor) iconBackgroundColor = String(dynamic.iconBackgroundColor);
+        if (dynamic.iconTextColor) iconTextColor = String(dynamic.iconTextColor);
+        if (dynamic.headingColor) headingColor = String(dynamic.headingColor);
+        if (dynamic.subheadingColor) subheadingColor = String(dynamic.subheadingColor);
+        if (dynamic.tierHeadingColor) tierHeadingColor = String(dynamic.tierHeadingColor);
+        if (dynamic.tierSubheadingColor) tierSubheadingColor = String(dynamic.tierSubheadingColor);
+        if (dynamic.hintColor) hintColor = String(dynamic.hintColor);
+      }
+      if (data.sequentialTitle) sequentialTitle = String(data.sequentialTitle);
+      if (data.selectorTargets) {
+        var parsedTargets = String(data.selectorTargets)
+          .split(",")
+          .map(function (s) {
+            return s.trim();
+          })
+          .filter(Boolean);
+        selectorTargets = withDefaultWidgetTargets(parsedTargets);
+      }
+      if (data.nameTargetSelectors) {
+        var parsedNameTargets = String(data.nameTargetSelectors)
+          .split(",")
+          .map(function (s) {
+            return s.trim();
+          })
+          .filter(Boolean);
+        if (parsedNameTargets.length) nameTargetSelectors = parsedNameTargets;
+      }
       var mapped = mapPrismaTiersToLegacyShippingTiers(data.tiers);
       if (!mapped || mapped.length === 0) return false;
       var exp = getShopCurrencyExponent(cart);
-      tiers = parseTiers(JSON.stringify(mapped), shippingChargeCents, exp);
-      applyDynamicTierLabels(data.tiers);
-      // Use tier messages for the sequential widget.
-      if (data.appliedTier && data.appliedTier.message) {
-        sequentialMsg2 = String(data.appliedTier.message);
+      var nextTiers = parseTiers(JSON.stringify(mapped), shippingChargeCents, exp);
+      // Keep the widget in 2-tier mode when storefront config already contains two milestones.
+      // Some dynamic responses may only return one active tier temporarily.
+      if (dynamicTierMode && nextTiers.length < 2 && Array.isArray(tiers) && tiers.length >= 2) {
+        nextTiers = tiers;
       }
+      tiers = nextTiers;
+      applyDynamicTierLabels(data.tiers);
       return true;
     });
   }
@@ -232,6 +428,173 @@
         return o !== h && o.contains(h);
       });
     });
+  }
+
+  function isCartDrawerHost(host) {
+    if (!host || !(host instanceof Element)) return false;
+    return !!host.closest(
+      "cart-drawer, .cart-drawer, .drawer, [id*='CartDrawer'], [class*='cart-drawer']"
+    );
+  }
+
+  /** Drawer / cart UI root so orphan cleanup still matches when placeWidget inserts next to a header sibling of `host`. */
+  function mountingRegionForHost(host) {
+    if (!host || !(host instanceof Element)) return null;
+    var cartShell = host.closest("cart-drawer, [id*='CartDrawer'], .cart-drawer, .drawer");
+    if (cartShell && cartShell.contains(host)) return cartShell;
+    return host;
+  }
+
+  function visibleHostViewportScore(host) {
+    if (!host || !(host instanceof Element)) return 0;
+    var r = host.getBoundingClientRect();
+    var w = window.innerWidth || 0;
+    var h = window.innerHeight || 0;
+    var x1 = Math.max(0, Math.min(r.right, w) - Math.max(0, r.left));
+    var y1 = Math.max(0, Math.min(r.bottom, h) - Math.max(0, r.top));
+    return Math.max(0, x1) * Math.max(0, y1);
+  }
+
+  function findOpenCartContainer() {
+    return document.querySelector(
+      "cart-drawer[open], cart-drawer:not([aria-hidden='true']), .cart-drawer.is-open, .drawer.is-open, #CartDrawer:not([aria-hidden='true'])"
+    );
+  }
+
+  /**
+   * When only one widget should exist: prefer an open cart/drawer host, else the most visible
+   * target, else document order. Works with any theme; pairs with removeOrphanInjectedWidgets.
+   */
+  function pickSingleWidgetHost(hosts) {
+    if (!hosts || hosts.length <= 1) return hosts;
+    var open = findOpenCartContainer();
+    if (open) {
+      var inOpen = hosts.filter(function (h) {
+        return open.contains(h);
+      });
+      if (inOpen.length) {
+        var deep = keepDeepestHosts(inOpen);
+        deep.sort(function (a, b) {
+          var pos = a.compareDocumentPosition(b);
+          if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+          if (pos & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+          return 0;
+        });
+        return [deep[0]];
+      }
+    }
+    var best = null;
+    var bestScore = -1;
+    for (var i = 0; i < hosts.length; i += 1) {
+      var sc = visibleHostViewportScore(hosts[i]);
+      if (sc > bestScore) {
+        bestScore = sc;
+        best = hosts[i];
+      }
+    }
+    if (best && bestScore > 0) return [best];
+    var sorted = hosts.slice().sort(function (a, b) {
+      var pos = a.compareDocumentPosition(b);
+      if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+      if (pos & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+      return 0;
+    });
+    return [sorted[0]];
+  }
+
+  function removeOrphanInjectedWidgets(validHosts) {
+    // Empty host list must not delete widgets: many themes omit cart drawer innards when the cart
+    // is empty, so selectors match nothing briefly — removing here would strip the tier UI until
+    // a full page reload.
+    if (!validHosts || !validHosts.length) return;
+    var regions = validHosts.map(mountingRegionForHost).filter(Boolean);
+    document.querySelectorAll('.sce-free-shipping-widget[data-sce-scope="' + injectionScopeId + '"]').forEach(function (node) {
+      var ok = regions.some(function (r) {
+        return r.contains(node);
+      });
+      if (!ok) node.remove();
+    });
+  }
+
+  /**
+   * placeWidget() can reparent the root outside `host` (e.g. next to drawer header). The next
+   * update must reuse that node — not create another — or the drawer stacks duplicate widgets.
+   */
+  function findInjectedWidgetRootInHostRegion(host) {
+    if (!host) return null;
+    var region = mountingRegionForHost(host);
+    if (!region) return null;
+    return region.querySelector('[data-sce-scope="' + injectionScopeId + '"]');
+  }
+
+  /** Safety net if multiple copies with this script's scope accumulated (reparent + missed reuse). */
+  function dedupeInjectedWidgetsInOpenCart() {
+    if (allowMultipleWidgetHosts) return;
+    var open = findOpenCartContainer();
+    if (!open) return;
+    var nodes = open.querySelectorAll('.sce-free-shipping-widget[data-sce-scope="' + injectionScopeId + '"]');
+    if (nodes.length <= 1) return;
+    for (var i = 1; i < nodes.length; i += 1) {
+      nodes[i].remove();
+    }
+  }
+
+  /**
+   * On product pages, many themes (e.g. Wokiee) repeat wrappers or side columns so the same
+   * selector matches several siblings. keepDeepestHosts only drops ancestors, not siblings.
+   * Keep one non-drawer mount: hosts that co ntain the primary add-to-cart form (largest in
+   * main), else the first non-drawer host in document order. Drawer/cart targets unchanged.
+   */
+  function dedupeWidgetHostsAcrossThemes(hosts) {
+    if (!hosts || hosts.length <= 1) return hosts;
+    var drawerRelated = [];
+    var nonDrawer = [];
+    for (var i = 0; i < hosts.length; i += 1) {
+      var h = hosts[i];
+      if (isCartDrawerHost(h)) drawerRelated.push(h);
+      else nonDrawer.push(h);
+    }
+    if (nonDrawer.length <= 1) return hosts;
+
+    var onProductPage = /\/products\//i.test(window.location.pathname || "");
+    if (!onProductPage) return hosts;
+
+    var main = document.querySelector("main, #MainContent, [role='main'], .main-content");
+    var forms = main ? main.querySelectorAll("form[action*='/cart/add']") : [];
+    var primaryForm = null;
+    if (forms && forms.length) {
+      var bestArea = -1;
+      for (var fi = 0; fi < forms.length; fi += 1) {
+        var f = forms[fi];
+        var r = f.getBoundingClientRect();
+        var area = Math.max(0, r.width) * Math.max(0, r.height);
+        if (area > bestArea) {
+          bestArea = area;
+          primaryForm = f;
+        }
+      }
+    }
+
+    var chosenNonDrawer;
+    if (primaryForm) {
+      var preferred = [];
+      for (var j = 0; j < nonDrawer.length; j += 1) {
+        if (nonDrawer[j].contains(primaryForm)) preferred.push(nonDrawer[j]);
+      }
+      chosenNonDrawer = preferred.length ? keepDeepestHosts(preferred) : null;
+    }
+
+    if (!chosenNonDrawer || !chosenNonDrawer.length) {
+      nonDrawer.sort(function (a, b) {
+        var pos = a.compareDocumentPosition(b);
+        if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+        if (pos & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+        return 0;
+      });
+      chosenNonDrawer = [nonDrawer[0]];
+    }
+
+    return uniqueElements(drawerRelated.concat(chosenNonDrawer));
   }
 
   function formatAmountByToken(cents, token) {
@@ -365,7 +728,31 @@
       return;
     }
     el.removeAttribute("aria-hidden");
-    el.textContent = "Min. " + formatMoney(minCents);
+    el.textContent = (minAmountPrefixText || "Min.") + " " + formatMoney(minCents);
+  }
+
+  function applyWidgetColors(root) {
+    if (!root) return;
+    if (!widgetUseCustomColors) {
+      root.style.backgroundColor = "";
+      root.style.color = "";
+      root.style.borderColor = "";
+      var resetTargets = root.querySelectorAll(
+        ".sce-free-shipping-widget__title, .sce-free-shipping-widget__message, .sce-free-shipping-widget__hint, .sce-seq-title, .sce-seq-message, .sce-seq-hint, .sce-seq-step__label, .sce-seq-step__sub, .sce-seq-step__min, .sce-milestone"
+      );
+      for (var r = 0; r < resetTargets.length; r += 1) resetTargets[r].style.color = "";
+      return;
+    }
+    if (widgetBackgroundColor) root.style.backgroundColor = widgetBackgroundColor;
+    if (widgetBorderColor) root.style.borderColor = widgetBorderColor;
+    if (!widgetTextColor) return;
+    root.style.color = widgetTextColor;
+    var colorTargets = root.querySelectorAll(
+      ".sce-free-shipping-widget__title, .sce-free-shipping-widget__message, .sce-free-shipping-widget__hint, .sce-seq-title, .sce-seq-message, .sce-seq-hint, .sce-seq-step__label, .sce-seq-step__sub, .sce-seq-step__min, .sce-milestone"
+    );
+    for (var i = 0; i < colorTargets.length; i += 1) {
+      colorTargets[i].style.color = widgetTextColor;
+    }
   }
 
   /** Dynamic tier targets for UI progress: Tier 1 (discount), Tier 2 (free shipping). */
@@ -474,9 +861,9 @@
   var SEQUENTIAL_WIDGET_INNER =
     '<div class="sce-free-shipping-widget__title sce-seq-title"></div>' +
     '<div class="sce-free-shipping-widget__message sce-seq-message"></div>' +
-    '<div class="sce-free-shipping-widget__bar sce-seq-main-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">' +
-    '<div class="sce-free-shipping-widget__bar-fill sce-seq-main-bar-fill"></div>' +
-    "</div>" +
+    // '<div class="sce-free-shipping-widget__bar sce-seq-main-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">' +
+    // '<div class="sce-free-shipping-widget__bar-fill sce-seq-main-bar-fill"></div>' +
+    // "</div>" +
     '<div class="sce-seq-steps">' +
     '<div class="sce-seq-step" data-tier-step="1">' +
     '<div class="sce-seq-step__icon-wrap"><span class="sce-seq-step__dot"></span><span class="sce-seq-step__icon" aria-hidden="true">%</span></div>' +
@@ -526,9 +913,14 @@
       ? host
       : host.querySelector(".sce-free-shipping-widget");
     if (!root) {
+      root = findInjectedWidgetRootInHostRegion(host);
+    }
+    if (!root) {
       root = document.createElement("div");
       root.className = "sce-free-shipping-widget sce-free-shipping-widget--sequential";
       root.innerHTML = SEQUENTIAL_WIDGET_INNER;
+      root.setAttribute("data-sce-scope", injectionScopeId);
+      root.setAttribute("data-sce-injected", "1");
     } else if (!root.querySelector(".sce-seq-main-bar")) {
       root.className = "sce-free-shipping-widget sce-free-shipping-widget--sequential";
       root.innerHTML = SEQUENTIAL_WIDGET_INNER;
@@ -537,6 +929,9 @@
     root.classList.add("sce-free-shipping-widget--sequential");
     root.setAttribute("data-unlock-key", unlockAttributeKey);
     placeWidget(host, root);
+    ensureWidgetCoreStyles(root, true);
+    applyWidgetColors(root);
+    root.classList.toggle("sce-free-shipping-widget--sce-primary", !allowMultipleWidgetHosts);
 
     var titleEl = root.querySelector(".sce-seq-title");
     var messageEl = root.querySelector(".sce-seq-message");
@@ -583,6 +978,10 @@
     }
 
     if (titleEl) titleEl.textContent = sequentialTitle;
+    if (titleEl) {
+      titleEl.style.display = showHeading ? "" : "none";
+      titleEl.style.color = headingColor;
+    }
 
     if (messageEl) {
       if (tierCount === 1) {
@@ -591,6 +990,8 @@
       } else if (tier2Complete) messageEl.textContent = sequentialMsg2;
       else if (tier1Complete) messageEl.textContent = sequentialMsg1;
       else messageEl.textContent = sequentialMsg0;
+      messageEl.style.display = showSubheading ? "" : "none";
+      messageEl.style.color = subheadingColor;
     }
 
     if (barFill) {
@@ -602,30 +1003,64 @@
     root.setAttribute("data-seq-progress", String(progressPct));
     if (connFill) {
       connFill.style.width = tierCount > 1 ? String(progressPct) + "%" : "0%";
+      connFill.style.background = barFillColor;
+      if (connFill.parentNode && connFill.parentNode.style) {
+        connFill.parentNode.style.background = barTrackColor;
+      }
     }
 
-    if (step1Label) step1Label.textContent = tier1Label;
-    if (step2Label) step2Label.textContent = tier2Label;
+    if (step1Label) step1Label.textContent = tier1LabelText || tier1Label;
+    if (step2Label) step2Label.textContent = tier2LabelText || tier2Label;
     setStepSubText(step1Sub, tier1Label, tier1TagText);
     setStepSubText(step2Sub, tier2Label, tier2TagText);
     setStepMinAmount(step1Min, targets.tier1Cents);
     setStepMinAmount(step2Min, tierCount > 1 ? targets.tier2Cents : NaN);
 
     if (step1Icon) {
-      if (tierCount === 1) {
-        var singleShip =
-          /free\s*shipping|shipping/i.test(String(tier1Label || "") + String(tier1TagText || ""));
-        step1Icon.textContent = singleShip ? "🚚" : "%";
-      } else {
-        step1Icon.textContent = "%";
-      }
+      step1Icon.textContent = tier1Icon || "%";
+    }
+    var step2Icon = tierStep2 ? tierStep2.querySelector(".sce-seq-step__icon") : null;
+    if (step2Icon) {
+      step2Icon.textContent = tier2Icon || "🚚";
     }
 
     if (tierStep1) {
+      var step1IconWrap = tierStep1.querySelector(".sce-seq-step__icon-wrap");
+      if (step1IconWrap) step1IconWrap.style.display = showTierIcons ? "" : "none";
+      if (step1IconWrap) {
+        step1IconWrap.style.background = iconBackgroundColor;
+        step1IconWrap.style.color = iconTextColor;
+      }
+      if (step1Label) {
+        step1Label.style.display = showTierLabels && showTier1Heading ? "" : "none";
+        step1Label.style.color = tierHeadingColor;
+      }
+      if (step1Sub) {
+        step1Sub.style.display = showTierLabels && showTier1Subheading ? "" : "none";
+        step1Sub.style.color = tierSubheadingColor;
+      }
+      if (step1Min) step1Min.style.display = showTierMinimums ? "" : "none";
+      if (step1Min) step1Min.style.color = tierSubheadingColor;
       tierStep1.classList.toggle("is-complete", tier1Complete);
       tierStep1.classList.toggle("is-active", !tier1Complete);
     }
     if (tierStep2) {
+      var step2IconWrap = tierStep2.querySelector(".sce-seq-step__icon-wrap");
+      if (step2IconWrap) step2IconWrap.style.display = showTierIcons ? "" : "none";
+      if (step2IconWrap) {
+        step2IconWrap.style.background = iconBackgroundColor;
+        step2IconWrap.style.color = iconTextColor;
+      }
+      if (step2Label) {
+        step2Label.style.display = showTierLabels && showTier2Heading ? "" : "none";
+        step2Label.style.color = tierHeadingColor;
+      }
+      if (step2Sub) {
+        step2Sub.style.display = showTierLabels && showTier2Subheading ? "" : "none";
+        step2Sub.style.color = tierSubheadingColor;
+      }
+      if (step2Min) step2Min.style.display = showTierMinimums ? "" : "none";
+      if (step2Min) step2Min.style.color = tierSubheadingColor;
       tierStep2.classList.toggle("is-enabled", tier2Eligible);
       tierStep2.classList.toggle("is-complete", tier2Complete);
       tierStep2.classList.toggle("is-active", tier2Eligible && !tier2Complete);
@@ -636,36 +1071,47 @@
       var shipLabel = formatMoney(shippingChargeCents);
       if (tierCount === 1) {
         if (tier1Complete) {
-          hint.textContent = "Current subtotal: " + subLabel + " · " + sequentialMsg2;
+          hint.textContent = subtotalLabel + ": " + subLabel + " · " + sequentialMsg2;
         } else {
           hint.textContent =
-            "Current subtotal: " +
+            subtotalLabel +
+            ": " +
             subLabel +
-            " (Estimated shipping: " +
+            " (" +
+            estimatedShippingLabel +
+            ": " +
             shipLabel +
             ") · " +
             sequentialHintZero;
         }
       } else if (tier2Complete) {
         hint.textContent =
-          "Current subtotal: " + subLabel + " · " + sequentialMsg2;
+          subtotalLabel + ": " + subLabel + " · " + sequentialMsg2;
       } else if (tier1Complete) {
         hint.textContent =
-          "Current subtotal: " +
+          subtotalLabel +
+          ": " +
           subLabel +
-          " (Estimated shipping: " +
+          " (" +
+          estimatedShippingLabel +
+          ": " +
           shipLabel +
           ") · " +
           sequentialHintMid;
       } else {
         hint.textContent =
-          "Current subtotal: " +
+          subtotalLabel +
+          ": " +
           subLabel +
-          " (Estimated shipping: " +
+          " (" +
+          estimatedShippingLabel +
+          ": " +
           shipLabel +
           ") · " +
           sequentialHintZero;
       }
+      hint.style.display = showHint ? "" : "none";
+      hint.style.color = hintColor;
     }
 
     if (dynamicTierMode) {
@@ -699,16 +1145,68 @@
   }
 
   function placeWidget(host, root) {
+    if (!host || !root) return;
     var mount = getWidgetMountPoint(host);
     if (!mount || !mount.container) return;
-
-    if (mount.before) {
-      mount.container.insertBefore(root, mount.before);
-      return;
+    var region = mountingRegionForHost(host) || mount.container;
+    var anchorSelector = '.sce-widget-mount[data-sce-scope="' + injectionScopeId + '"]';
+    var anchor = region.querySelector(anchorSelector);
+    if (!anchor) {
+      anchor = document.createElement("div");
+      anchor.className = "sce-widget-mount";
+      anchor.setAttribute("data-sce-scope", injectionScopeId);
+      anchor.setAttribute("data-sce-injected", "1");
+      if (mount.before) {
+        mount.container.insertBefore(anchor, mount.before);
+      } else {
+        mount.container.appendChild(anchor);
+      }
     }
-
-    mount.container.appendChild(root);
+    if (root.parentElement !== anchor) {
+      anchor.appendChild(root);
+    }
   }
+
+function ensureWidgetCoreStyles(root, isSequential) {
+  if (!root) return;
+  root.style.display = "block";
+  root.style.visibility = "visible";
+  root.style.opacity = "1";
+  root.style.width = "100%";
+  root.style.boxSizing = "border-box";
+  root.style.position = "relative";
+  if (!root.style.zIndex) root.style.zIndex = "2";
+
+  var bar = root.querySelector(".sce-free-shipping-widget__bar");
+  if (bar) {
+    bar.style.display = "block";
+    bar.style.width = "100%";
+    bar.style.overflow = "hidden";
+    bar.style.borderRadius = "999px";
+    bar.style.height = isSequential ? "10px" : "8px";
+    if (!bar.style.background) bar.style.background = "#e5e7eb";
+  }
+
+  var fill = root.querySelector(
+    isSequential
+      ? ".sce-seq-main-bar-fill"
+      : ".sce-free-shipping-widget__bar-fill",
+  );
+  if (fill) {
+    fill.style.display = "block";
+    fill.style.height = "100%";
+    if (!fill.style.minWidth) fill.style.minWidth = "0px";
+    if (!fill.style.background) fill.style.background = "#111827";
+  }
+
+  if (isSequential) {
+    var steps = root.querySelector(".sce-seq-steps");
+    if (steps) {
+      steps.style.display = "flex";
+      steps.style.alignItems = "stretch";
+    }
+  }
+}
 
   function renderWidget(host, cart) {
     if (!host) return;
@@ -729,6 +1227,9 @@
       ? host
       : host.querySelector(".sce-free-shipping-widget");
     if (!root) {
+      root = findInjectedWidgetRootInHostRegion(host);
+    }
+    if (!root) {
       root = document.createElement("div");
       root.className = "sce-free-shipping-widget";
       root.innerHTML =
@@ -741,8 +1242,13 @@
           '<span class="sce-milestone" data-step="100">Free</span>' +
         '</div>' +
         '<div class="sce-free-shipping-widget__hint"></div>';
+      root.setAttribute("data-sce-scope", injectionScopeId);
+      root.setAttribute("data-sce-injected", "1");
     }
     placeWidget(host, root);
+    ensureWidgetCoreStyles(root, false);
+    applyWidgetColors(root);
+    root.classList.toggle("sce-free-shipping-widget--sce-primary", !allowMultipleWidgetHosts);
 
     var title = root.querySelector(".sce-free-shipping-widget__title");
     var message = root.querySelector(".sce-free-shipping-widget__message");
@@ -870,6 +1376,26 @@
         hosts.push(el);
       });
     });
+    hosts = uniqueElements(hosts);
+
+    // Fallbacks: if selectors miss, still render in common storefront containers.
+    if (!hosts.length) {
+      var productHost = document.querySelector(
+        ".product__info-container, .product-form, form[action*='/cart/add'], .product__info-wrapper",
+      );
+      if (productHost) hosts.push(productHost);
+    }
+    if (!hosts.length) {
+      var cartHost = document.querySelector(
+        "form[action*='/cart'], .cart__blocks, cart-drawer, [id*='CartDrawer'], .cart-drawer__content, .drawer__inner",
+      );
+      if (cartHost) hosts.push(cartHost);
+    }
+    if (!hosts.length) {
+      var mainHost = document.querySelector("main, #MainContent, .main-content");
+      if (mainHost) hosts.push(mainHost);
+    }
+
     return uniqueElements(hosts);
   }
 
@@ -918,6 +1444,9 @@
     if (!(el instanceof Element)) return false;
     if (el.closest(".sce-free-shipping-widget, .sce-cart-user-name, .sce-cart-user-name-inline")) return false;
 
+    // If merchant adds configured target classes/sections dynamically, refresh immediately.
+    if (elementTouchesAnyTarget(el, selectorTargets)) return true;
+
     if (
       el.matches("form[action*='/cart'], cart-drawer, [id*='CartDrawer'], [class*='cart-drawer'], [class*='drawer']") ||
       el.querySelector("form[action*='/cart'], cart-drawer, [id*='CartDrawer'], [class*='cart-drawer'], [class*='drawer']")
@@ -947,7 +1476,16 @@
         if (needLog) postCartAccessLog(cart);
         var runRender = function () {
           if (!needWidget) return;
-          keepDeepestHosts(getHosts()).forEach(function (host) {
+          var hosts = keepDeepestHosts(getHosts());
+          if (!allowMultipleWidgetHosts) {
+            hosts = dedupeWidgetHostsAcrossThemes(hosts);
+          }
+          if (!allowMultipleWidgetHosts) {
+            hosts = pickSingleWidgetHost(hosts);
+          }
+          removeOrphanInjectedWidgets(hosts);
+          dedupeInjectedWidgetsInOpenCart();
+          hosts.forEach(function (host) {
             if (sequentialMode) {
               renderSequentialWidget(host, cart);
             } else {
@@ -957,6 +1495,18 @@
         };
 
         if (dynamicTierMode) {
+          var subtotal = getCartSubtotalCents(cart);
+          var cur = cart && cart.currency ? String(cart.currency).trim() : "";
+          var cartSig = String(cart && cart.item_count || 0) + "_" + String(subtotal || 0) + "_" + cur;
+          var now = Date.now();
+          var shouldSyncDynamic =
+            cartSig !== lastDynamicCartSig || now - lastDynamicSyncAt > 10000;
+          if (!shouldSyncDynamic) {
+            runRender();
+            return;
+          }
+          lastDynamicCartSig = cartSig;
+          lastDynamicSyncAt = now;
           refreshDynamicTiersWithCart(cart).then(runRender);
         } else {
           runRender();
@@ -1017,8 +1567,30 @@
   observer.observe(document.documentElement, { childList: true, characterData: true, subtree: true });
 
   // Safety sync for themes that update cart text without reliable events.
-  window.setInterval(function () {
-    var cartOpen = document.querySelector("cart-drawer[open], .cart-drawer.is-open, #CartDrawer:not([aria-hidden='true']), form[action='/cart']");
+  pollIntervalId = window.setInterval(function () {
+    var cartOpen = document.querySelector("cart-drawer[open], .cart-drawer.is-open, #CartDrawer:not([aria-hidden='true']), form[action*='/cart']");
     if (cartOpen) debouncedUpdate();
   }, 3000);
+
+  globalInstances[instanceKey] = {
+    teardown: function () {
+      try {
+        observer.disconnect();
+      } catch (_) {}
+      try {
+        window.clearTimeout(updateTimeout);
+        window.clearTimeout(logPostTimer);
+      } catch (_) {}
+      try {
+        if (pollIntervalId) window.clearInterval(pollIntervalId);
+      } catch (_) {}
+      try {
+        document
+          .querySelectorAll('[data-sce-scope="' + injectionScopeId + '"]')
+          .forEach(function (node) {
+            node.remove();
+          });
+      } catch (_) {}
+    },
+  };
 })();

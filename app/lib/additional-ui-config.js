@@ -5,7 +5,21 @@ export const DEFAULT_MESSAGES = [
 ];
 
 export function generateSectionId() {
-  return `sec_${Math.random().toString(36).slice(2, 10)}${Math.random().toString(36).slice(2, 10)}`;
+  const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+  let out = "";
+  for (let i = 0; i < 12; i += 1) {
+    out += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return out;
+}
+
+function ensureTwelveCharId(value, fallback = "") {
+  const normalized = String(value ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+  if (normalized.length === 12) return normalized;
+  if (fallback) return fallback;
+  return generateSectionId();
 }
 
 /** Marquee lines are plain strings; one `sectionId` identifies the whole block. */
@@ -38,6 +52,7 @@ const CONFIG_DEFAULTS = {
   marqueeSeparator: "•",
   marqueeSeparatorRepeat: 1,
   marqueeTrailingSeparator: true,
+  marqueeFullWidth: true,
   gapPx: 24,
   fontSizePx: 22,
   paddingYpx: 14,
@@ -60,6 +75,7 @@ function baseConfigShape() {
     marqueeSeparator: CONFIG_DEFAULTS.marqueeSeparator,
     marqueeSeparatorRepeat: CONFIG_DEFAULTS.marqueeSeparatorRepeat,
     marqueeTrailingSeparator: CONFIG_DEFAULTS.marqueeTrailingSeparator,
+    marqueeFullWidth: CONFIG_DEFAULTS.marqueeFullWidth,
     gapPx: CONFIG_DEFAULTS.gapPx,
     fontSizePx: CONFIG_DEFAULTS.fontSizePx,
     paddingYpx: CONFIG_DEFAULTS.paddingYpx,
@@ -73,7 +89,7 @@ function baseConfigShape() {
 export function defaultAdditionalConfig() {
   return {
     ...baseConfigShape(),
-    sectionId: generateSectionId(),
+    sectionId: ensureTwelveCharId(""),
   };
 }
 
@@ -87,7 +103,7 @@ export function parseAdditionalConfig(json) {
   }
   const merged = { ...baseConfigShape(), ...raw };
   merged.messages = normalizeMessagesArray(merged.messages, CONFIG_DEFAULTS.messages());
-  merged.sectionId = String(merged.sectionId ?? "").trim();
+  merged.sectionId = ensureTwelveCharId(merged.sectionId);
   merged.gapPx = Math.max(8, Number(merged.gapPx) || CONFIG_DEFAULTS.gapPx);
   merged.displayMode = String(merged.displayMode || CONFIG_DEFAULTS.displayMode);
   if (merged.displayMode !== "rotate" && merged.displayMode !== "marquee") {
@@ -113,6 +129,7 @@ export function parseAdditionalConfig(json) {
     Math.min(6, Number(merged.marqueeSeparatorRepeat) || CONFIG_DEFAULTS.marqueeSeparatorRepeat),
   );
   merged.marqueeTrailingSeparator = merged.marqueeTrailingSeparator !== false;
+  merged.marqueeFullWidth = merged.marqueeFullWidth !== false;
   merged.fontSizePx = Math.max(12, Number(merged.fontSizePx) || CONFIG_DEFAULTS.fontSizePx);
   merged.paddingYpx = Math.max(0, Number(merged.paddingYpx) || CONFIG_DEFAULTS.paddingYpx);
   merged.paddingXpx = Math.max(0, Number(merged.paddingXpx) || CONFIG_DEFAULTS.paddingXpx);
@@ -123,8 +140,7 @@ export function parseAdditionalConfig(json) {
 
 /** Stable ID when older saved JSON has no sectionId (matches admin loader). */
 export function resolveSectionId(config, prismaRowId) {
-  const sid = String(config?.sectionId ?? "").trim();
+  const sid = ensureTwelveCharId(config?.sectionId ?? "", "");
   if (sid) return sid;
-  if (prismaRowId != null && String(prismaRowId).trim()) return `marquee-${prismaRowId}`;
-  return "";
+  return ensureTwelveCharId(String(prismaRowId ?? ""));
 }

@@ -125,8 +125,8 @@ function parseFunctionConfig(raw) {
       },
       tier2: {
         minSubtotal: 1000,
-        discountPercentage: 20,
-        message: "20% off unlocked",
+        discountPercentage: 10,
+        message: "10% off unlocked",
       },
     },
     shipping: {
