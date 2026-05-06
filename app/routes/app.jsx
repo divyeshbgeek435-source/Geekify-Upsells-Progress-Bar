@@ -86,8 +86,8 @@ export default function App() {
       </s-app-nav>
       <Outlet context={{ onboarding }} />
     </AppProvider>
-  );
-}
+  );      
+}   
 
 // Shopify needs React Router to catch some thrown responses, so that their headers are included in the response.
 export function ErrorBoundary() {
