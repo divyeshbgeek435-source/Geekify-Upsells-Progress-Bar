@@ -9,7 +9,7 @@ export async function enforceSingleActiveAnnouncementBar(shop, preferredId = nul
   const trimmedShop = String(shop || "").trim();
   if (!trimmedShop) return;
 
-  const actives = await prisma.announcementBar.findMany({
+  const actives = await prisma.announcementHeader.findMany({
     where: { shop: trimmedShop, active: true },
     orderBy: { updatedAt: "desc" },
     select: { id: true },
@@ -24,7 +24,7 @@ export async function enforceSingleActiveAnnouncementBar(shop, preferredId = nul
   const toDeactivate = actives.filter((a) => a.id !== keepId).map((a) => a.id);
   if (!toDeactivate.length) return;
 
-  await prisma.announcementBar.updateMany({
+  await prisma.announcementHeader.updateMany({
     where: { id: { in: toDeactivate }, shop: trimmedShop },
     data: { active: false },
   });

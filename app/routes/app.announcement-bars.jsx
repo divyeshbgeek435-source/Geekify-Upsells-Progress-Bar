@@ -2496,9 +2496,14 @@ import {
   generateAnnouncementSectionHtmlId,
   normalizeAnnouncementSectionHtmlId,
 } from "../lib/announcement-section-html-id.js";
+import {
+  buildAnnouncementTemplate,
+  resolveSectionHtmlIdFromHeader,
+} from "../lib/announcement-header-template.js";
 
 const ANNOUNCE_EMBED_HANDLE = "announcement-bar-embed";
 const ANNOUNCE_BLOCK_HANDLE = "announcement-bar-block";
+const useIsomorphicLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
 const ANNOUNCEMENT_STYLE_PRESETS = [
   {
     id: "scrolling",
@@ -3732,7 +3737,7 @@ function FixedAnnouncementPreviewShell({
   const barWrapRef = useRef(null);
   const [barHeight, setBarHeight] = useState(48);
 
-  useLayoutEffect(() => {
+  useIsomorphicLayoutEffect(() => {
     const el = barWrapRef.current;
     if (!el) return undefined;
     const measure = () => {
@@ -3804,7 +3809,7 @@ export const loader = async ({ request }) => {
   const url = new URL(request.url);
   const editId = url.searchParams.get("edit");
 
-  const bars = await prisma.announcementBar.findMany({
+  const bars = await prisma.announcementHeader.findMany({
     where: { shop },
     orderBy: { updatedAt: "desc" },
   });
@@ -3842,7 +3847,7 @@ export const action = async ({ request }) => {
 
   if (intent === "delete") {
     const id = String(form.get("id") || "");
-    await prisma.announcementBar.deleteMany({ where: { id, shop } });
+    await prisma.announcementHeader.deleteMany({ where: { id, shop } });
     return { ok: true, deleted: true };
   }
 
@@ -3852,6 +3857,7 @@ export const action = async ({ request }) => {
   const customHtml = String(form.get("customHtml") ?? "");
   const customLiquid = String(form.get("customLiquid") ?? "");
   const customCss = String(form.get("customCss") ?? "");
+  const templateJsonRaw = String(form.get("templateJson") || "").trim();
   const id = String(form.get("id") || "");
 
   const cfgParsed = parseConfig(configJson);
@@ -3866,12 +3872,12 @@ export const action = async ({ request }) => {
   }
   const sectionHtmlIdFinal = parsedSectionId || generateAnnouncementSectionHtmlId();
 
-  const others = await prisma.announcementBar.findMany({
+  const others = await prisma.announcementHeader.findMany({
     where: { shop, ...(id ? { NOT: { id } } : {}) },
     select: { id: true, configJson: true },
   });
   for (const row of others) {
-    if (parseConfig(row.configJson).sectionHtmlId === sectionHtmlIdFinal) {
+    if (resolveSectionHtmlIdFromHeader(row) === sectionHtmlIdFinal) {
       return {
         ok: false,
         error: "That section HTML ID is already used by another announcement bar in this shop.",
@@ -3885,34 +3891,81 @@ export const action = async ({ request }) => {
   if (!name) {
     return { ok: false, error: "Name is required." };
   }
+  const templatePayload = buildAnnouncementTemplate({
+    rowId: id || undefined,
+    name,
+    barType,
+    configJson: configJsonOut,
+    customHtml,
+    customLiquid,
+    customCss,
+    templateJson: templateJsonRaw,
+    sectionHtmlId: sectionHtmlIdFinal,
+  });
 
   if (intent === "create") {
-    const created = await prisma.announcementBar.create({
-      data: {
-        shop,
-        name,
-        barType,
-        configJson: configJsonOut,
-        customHtml,
-        customLiquid,
-        customCss,
-      },
-    });
+    let created;
+    try {
+      created = await prisma.announcementHeader.create({
+        data: {
+          shop,
+          name,
+          barType,
+          configJson: configJsonOut,
+          templateJson: JSON.stringify(templatePayload),
+          customHtml,
+          customLiquid,
+          customCss,
+        },
+      });
+    } catch (error) {
+      const message = String(error?.message || "");
+      if (!message.includes("Unknown argument `templateJson`")) throw error;
+      created = await prisma.announcementHeader.create({
+        data: {
+          shop,
+          name,
+          barType,
+          configJson: configJsonOut,
+          customHtml,
+          customLiquid,
+          customCss,
+        },
+      });
+    }
     return { ok: true, createdId: created.id };
   }
 
   if (intent === "update") {
-    const result = await prisma.announcementBar.updateMany({
-      where: { id, shop },
-      data: {
-        name,
-        barType,
-        configJson: configJsonOut,
-        customHtml,
-        customLiquid,
-        customCss,
-      },
-    });
+    let result;
+    try {
+      result = await prisma.announcementHeader.updateMany({
+        where: { id, shop },
+        data: {
+          name,
+          barType,
+          configJson: configJsonOut,
+          templateJson: JSON.stringify(templatePayload),
+          customHtml,
+          customLiquid,
+          customCss,
+        },
+      });
+    } catch (error) {
+      const message = String(error?.message || "");
+      if (!message.includes("Unknown argument `templateJson`")) throw error;
+      result = await prisma.announcementHeader.updateMany({
+        where: { id, shop },
+        data: {
+          name,
+          barType,
+          configJson: configJsonOut,
+          customHtml,
+          customLiquid,
+          customCss,
+        },
+      });
+    }
     if (result.count === 0) {
       return { ok: false, error: "Bar not found." };
     }
@@ -3943,8 +3996,7 @@ export default function AnnouncementBarsPage() {
   const [customCss, setCustomCss] = useState(() => editingBar?.customCss ?? "");
   const [sectionHtmlId, setSectionHtmlId] = useState(() => {
     if (!editingBar) return generateAnnouncementSectionHtmlId();
-    const s = parseConfig(editingBar.configJson).sectionHtmlId;
-    return s || `sce-ab-${editingBar.id}`;
+    return resolveSectionHtmlIdFromHeader(editingBar);
   });
 
   const editKey = editingBar?.id ?? "__new__";
@@ -4005,9 +4057,7 @@ export default function AnnouncementBarsPage() {
       setCustomHtml(editingBar.customHtml ?? "");
       setCustomLiquid(editingBar.customLiquid ?? "");
       setCustomCss(editingBar.customCss ?? "");
-      setSectionHtmlId(
-        parseConfig(editingBar.configJson).sectionHtmlId || `sce-ab-${editingBar.id}`,
-      );
+      setSectionHtmlId(resolveSectionHtmlIdFromHeader(editingBar));
       setCreateActiveTab("messages");
       setSelectedTemplateId("");
       setCreateModalOpen(true);
@@ -4026,7 +4076,9 @@ export default function AnnouncementBarsPage() {
 
   useEffect(() => {
     if (actionData?.ok && actionData?.createdId) {
-      navigate(withShopifyParams(`/app/announcement-bars?edit=${actionData.createdId}`));
+      setCreateModalOpen(false);
+      setDesignModalOpen(false);
+      navigate(withShopifyParams("/app/announcement-bars"));
     }
   }, [actionData?.createdId, actionData?.ok, navigate, withShopifyParams]);
 
@@ -4051,6 +4103,7 @@ export default function AnnouncementBarsPage() {
       fd.set("customHtml", customHtml);
       fd.set("customLiquid", customLiquid);
       fd.set("customCss", customCss);
+      fd.set("templateJson", String(editingBar?.templateJson || "{}"));
       submit(fd, { method: "post" });
     },
     [
@@ -4133,7 +4186,7 @@ export default function AnnouncementBarsPage() {
         }
         .ab-preview-shell { border-radius: 12px; overflow: hidden; box-shadow: 0 12px 40px rgba(15, 23, 42, 0.12); }
         .ab-design-dialog {
-          width: 960px;
+          // width: 960px;
           // max-height: min(90vh, 720px);
           padding: 0;
           border: none;
@@ -4381,7 +4434,7 @@ export default function AnnouncementBarsPage() {
                   <s-table-cell>
                     <s-stack direction="block" gap="small-100">
                       <s-text fontVariantNumeric="tabular-nums" type="strong">
-                        {parseConfig(b.configJson).sectionHtmlId || `sce-ab-${b.id}`}
+                        {resolveSectionHtmlIdFromHeader(b)}
                       </s-text>
                     </s-stack>
                   </s-table-cell>
@@ -4401,7 +4454,7 @@ export default function AnnouncementBarsPage() {
                         type="button"
                         variant="tertiary"
                         onClick={() => {
-                          const sid = parseConfig(b.configJson).sectionHtmlId || `sce-ab-${b.id}`;
+                          const sid = resolveSectionHtmlIdFromHeader(b);
                           void navigator.clipboard?.writeText(sid);
                         }}
                       >

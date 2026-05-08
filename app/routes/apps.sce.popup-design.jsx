@@ -3,6 +3,7 @@ import { GraphqlQueryError } from "@shopify/shopify-api";
 import { SessionNotFoundError } from "@shopify/shopify-app-react-router/server";
 import shopify, { authenticate } from "../shopify.server";
 import { parsePopupDesignConfig, resolvePopupDesignId } from "../lib/popup-design-config.js";
+import { templateRenderPayload } from "../lib/popup-design-template.js";
 import prisma from "../db.server";
 
 const BAR_TYPE = "popup_design";
@@ -170,17 +171,18 @@ export const loader = async ({ request }) => {
     ""
   ).trim();
 
-  const rows = await prisma.announcementBar.findMany({
-    where: { shop, barType: BAR_TYPE },
+  const rows = await prisma.popupDesign.findMany({
+    where: { shop },
     orderBy: { updatedAt: "desc" },
-    select: { id: true, updatedAt: true, configJson: true },
+    select: { id: true, updatedAt: true, popupDesignId: true, configJson: true, templateJson: true },
   });
 
   let row = null;
   if (requestedDesignId) {
     for (const r of rows) {
-      const parsed = parsePopupDesignConfig(r.configJson);
-      const resolvedId = resolvePopupDesignId(parsed, r.id);
+      const resolvedId =
+        String(r.popupDesignId || "").trim() ||
+        resolvePopupDesignId(parsePopupDesignConfig(r.configJson), r.id);
       if (resolvedId === requestedDesignId) {
         row = r;
         break;
@@ -202,11 +204,15 @@ export const loader = async ({ request }) => {
     );
   }
 
-  const parsed = parsePopupDesignConfig(row.configJson);
-  const config = {
-    ...parsed,
-    popupDesignId: resolvePopupDesignId(parsed, row.id),
-  };
+  const template = (() => {
+    try {
+      return JSON.parse(String(row.templateJson || "{}"));
+    } catch {
+      return {};
+    }
+  })();
+  const payload = templateRenderPayload(template, row.configJson);
+  const config = { ...payload.config, popupDesignId: payload.popupDesignId || row.popupDesignId };
 
   /** GET verify: same payload as POST `intent: verify_customer` (some proxies handle GET more reliably). */
   if (url.searchParams.get("intent") === "verify_customer") {
@@ -280,6 +286,7 @@ export const loader = async ({ request }) => {
     config,
     subscriberCount,
     matched: true,
+    template,
   });
 
   return new Response(body, {
@@ -329,15 +336,17 @@ export const action = async ({ request }) => {
     return jsonNoStore({ ok: false, error: "validation", message: "invalid_email" }, 400);
   }
 
-  const rows = await prisma.announcementBar.findMany({
-    where: { shop, barType: BAR_TYPE },
-    select: { id: true, configJson: true },
+  const rows = await prisma.popupDesign.findMany({
+    where: { shop },
+    select: { id: true, popupDesignId: true, configJson: true, templateJson: true },
   });
 
   let row = null;
   for (const r of rows) {
-    const parsed = parsePopupDesignConfig(r.configJson);
-    if (resolvePopupDesignId(parsed, r.id) === popupDesignId) {
+    const resolvedId =
+      String(r.popupDesignId || "").trim() ||
+      resolvePopupDesignId(parsePopupDesignConfig(r.configJson), r.id);
+    if (resolvedId === popupDesignId) {
       row = r;
       break;
     }

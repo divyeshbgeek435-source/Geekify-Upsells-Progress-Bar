@@ -78,17 +78,14 @@ export default function App() {
   return (
     <AppProvider embedded apiKey={apiKey}>
       <s-app-nav>
-        {/* <s-link href={withShopifyParams("/app")}>Home</s-link> */}
-        {/* <s-link href={withShopifyParams("/app/discounts")}>Discounts</s-link> */}
-        <s-link href={withShopifyParams("/app/additional")}>Announcement UI Lab</s-link>
-        <s-link href={withShopifyParams("/app/announcement-bars")}>Announcement Bars</s-link>
-        <s-link href={withShopifyParams("/app/popup-design")}>Popup Design</s-link>
+      <s-link href={withShopifyParams("/app/popup-design")}>Popup Design</s-link>
+      <s-link href={withShopifyParams("/app/announcement-bars")}>Announcement Bars</s-link>
+        <s-link href={withShopifyParams("/app/additional")}>Announcement Body</s-link>
       </s-app-nav>
       <Outlet context={{ onboarding }} />
     </AppProvider>
-  );      
-}   
-
+  );
+}
 // Shopify needs React Router to catch some thrown responses, so that their headers are included in the response.
 export function ErrorBoundary() {
   return boundary.error(useRouteError());

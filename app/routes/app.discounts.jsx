@@ -8033,6 +8033,7 @@ function resolveDiscountStatus(row, now = new Date()) {
 
 function resolveTierStatus(row, now = new Date()) {
   if (!row) return "INACTIVE";
+  if (row.active === false) return "INACTIVE";
   const scheduleStartAt = parseTierDate(row.scheduleStartAt);
   const scheduleEndAt = parseTierDate(row.scheduleEndAt);
   if (scheduleStartAt && now < scheduleStartAt) return "SCHEDULED";
@@ -8524,6 +8525,25 @@ export const loader = async ({ request }) => {
       ? resolveApplicableTier(tierRules, previewSubtotal)
       : null;
 
+  // Self-heal if the Shopify auto tier discount was deleted manually.
+  // As long as active tiers exist, recreate/sync the required discount definition.
+  try {
+    const discountByName = new Map(
+      (tierDiscounts || []).map((row) => [String(row.name || "").trim(), row]),
+    );
+    const syncableTiers = normalizeTierRows(tierRules).filter((tier) => {
+      if (tier.status !== "ACTIVE") return false;
+      const linked = discountByName.get(String(tier.discountName || "").trim());
+      if (!linked) return true;
+      return resolveDiscountStatus(linked) === "ACTIVE";
+    });
+    if (syncableTiers.length) {
+      await syncAutoTierDiscount(admin, syncableTiers);
+    }
+  } catch (error) {
+    console.warn("[tier-discount] loader auto-recovery failed", error);
+  }
+
   return {
     nodes,
     appDiscountTypes,
@@ -8563,18 +8583,18 @@ export const action = async ({ request }) => {
         discounts = [];
       }
     }
-    const activeDiscounts = new Set(
-      discounts
-        .filter((row) => resolveDiscountStatus(row) === "ACTIVE")
-        .map((row) => String(row.name || "").trim()),
-    );
     const normalized = normalizeTierRows(tiers);
     if (!discounts.length) return normalized.filter((tier) => tier.status === "ACTIVE");
-    return normalized.filter(
-      (tier) =>
-        tier.status === "ACTIVE" &&
-        activeDiscounts.has(String(tier.discountName || "").trim()),
+    const discountByName = new Map(
+      discounts.map((row) => [String(row.name || "").trim(), row]),
     );
+    return normalized.filter((tier) => {
+      if (tier.status !== "ACTIVE") return false;
+      const linked = discountByName.get(String(tier.discountName || "").trim());
+      // Keep legacy tiers visible/usable even if the parent discount row is missing.
+      if (!linked) return true;
+      return resolveDiscountStatus(linked) === "ACTIVE";
+    });
   };
   const rangesOverlap = (startA, endA, startB, endB) => {
     const aStart = startA ? startA.getTime() : Number.NEGATIVE_INFINITY;
@@ -8707,10 +8727,11 @@ export const action = async ({ request }) => {
     }
 
     let persistedToTierDiscount = false;
+    const upsertLookupName = String(originalDiscountName || discountName || "").trim();
     if (typeof prisma.tierDiscount?.upsert === "function") {
       try {
         await prisma.tierDiscount.upsert({
-          where: { shop_name: { shop: session.shop, name: discountName } },
+          where: { shop_name: { shop: session.shop, name: upsertLookupName || discountName } },
           create: {
             shop: session.shop,
             name: discountName,
@@ -8719,6 +8740,7 @@ export const action = async ({ request }) => {
             scheduleEndAt: discountScheduleEndAt,
           },
           update: {
+            name: discountName,
             active: discountActive,
             ...(scheduleLock.locked
               ? {}
@@ -8882,30 +8904,13 @@ export const action = async ({ request }) => {
 
     if (Object.keys(tierErrors).length) return { ok: false, errors: tierErrors };
 
-    if (typeof prisma.tierDiscount?.findUnique === "function") {
+    if (typeof prisma.tierDiscount?.upsert === "function") {
       try {
-        const parentDiscount = await prisma.tierDiscount.findUnique({
+        await prisma.tierDiscount.upsert({
           where: { shop_name: { shop: session.shop, name: tierDiscountName } },
+          create: { shop: session.shop, name: tierDiscountName, active: true },
+          update: { active: true },
         });
-        if (!parentDiscount) {
-          if (
-            tierDiscountName === "Default Discount" &&
-            typeof prisma.tierDiscount?.upsert === "function"
-          ) {
-            await prisma.tierDiscount.upsert({
-              where: { shop_name: { shop: session.shop, name: tierDiscountName } },
-              create: { shop: session.shop, name: tierDiscountName, active: true },
-              update: {},
-            });
-          } else {
-            return {
-              ok: false,
-              errors: {
-                tierDiscountName: "Create the Discount first, then add tiers inside it.",
-              },
-            };
-          }
-        }
       } catch (error) {
         if (!isMissingTableError(error, "TierDiscount")) throw error;
       }
@@ -9510,8 +9515,16 @@ function statusBadgeStyle(status) {
     case "EXPIRED":
       return { ...base, background: "#fee2e2", color: "#991b1b" };
     default:
-      return { ...base, background: "#f3f4f6", color: "#6b7280" };
+      return { ...base, background: "#f3f4f6", color: "#6b7280" };  
   }
+}
+
+function discountScheduleDisplay(group) {
+  const hasSchedule = Boolean(group?.discountScheduleStartAt || group?.discountScheduleEndAt);
+  if (hasSchedule) {
+    return `${group.discountScheduleStartAt ? group.discountScheduleStartAt.toLocaleString() : "Now"} → ${group.discountScheduleEndAt ? group.discountScheduleEndAt.toLocaleString() : "No end"}`;
+  }
+  return group?.discountActive === false ? "-" : "Always On";
 }
 
 function statusDot(status) {
@@ -9839,15 +9852,9 @@ function DiscountOverviewRow({ group, totalDiscountUsageCount, onConfigure, onDe
         {Math.max(Number(group.usageSum ?? 0), Number(totalDiscountUsageCount ?? 0))}
       </td> */}
       <td className="disc-overview-schedule">
-        {group.discountScheduleStartAt || group.discountScheduleEndAt ? (
-          <span>
-            {group.discountScheduleStartAt ? group.discountScheduleStartAt.toLocaleString() : "Now"}
-            {" -> "}
-            {group.discountScheduleEndAt ? group.discountScheduleEndAt.toLocaleString() : "No end"}
-          </span>
-        ) : (
-          <span className="disc-overview-always-on">Always on</span>
-        )}
+        <span className={discountScheduleDisplay(group) === "Always On" ? "disc-overview-always-on" : undefined}>
+          {discountScheduleDisplay(group)}
+        </span>
       </td>
       <td>
         <div className="disc-overview-actions">
@@ -9895,6 +9902,13 @@ export default function DiscountsIndex() {
   const location = useLocation();
   const navigate = useNavigate();
   const submit = useSubmit();
+  const visibleActionErrors = useMemo(() => {
+    const src = actionData?.errors;
+    if (!src || typeof src !== "object" || Array.isArray(src)) return src || null;
+    const next = { ...src };
+    delete next.discountScheduleConflict;
+    return Object.keys(next).length ? next : null;
+  }, [actionData?.errors]);
 
   const [tierName, setTierName] = useState("");
   const [tierDiscountName, setTierDiscountName] = useState("Default Discount");
@@ -9982,6 +9996,10 @@ export default function DiscountsIndex() {
   const [overviewSort, setOverviewSort] = useState("updated_desc");
   const [showDeleteDiscountModal, setShowDeleteDiscountModal] = useState(false);
   const [pendingDeleteDiscountName, setPendingDeleteDiscountName] = useState("");
+  const [showNoticeModal, setShowNoticeModal] = useState(false);
+  const [noticeTitle, setNoticeTitle] = useState("");
+  const [noticeMessage, setNoticeMessage] = useState("");
+  const [showScheduleConfirmModal, setShowScheduleConfirmModal] = useState(false);
   const [tier1Icon, setTier1Icon] = useState(tierWidgetSettings?.tier1Icon || "%");
   const [tier2Icon, setTier2Icon] = useState(tierWidgetSettings?.tier2Icon || "🚚");
   const [subtotalLabel, setSubtotalLabel] = useState(
@@ -10537,7 +10555,10 @@ export default function DiscountsIndex() {
     if (!showTierDiscountModal) return;
     const conflictMessage = actionData?.errors?.discountScheduleConflict;
     if (!conflictMessage) return;
-    if (typeof window !== "undefined") window.alert(conflictMessage);
+    setShowScheduleConfirmModal(false);
+    setNoticeTitle("Schedule conflict");
+    setNoticeMessage(String(conflictMessage));
+    setShowNoticeModal(true);
   }, [actionData, showTierDiscountModal]);
 
   useEffect(() => {
@@ -10607,11 +10628,15 @@ export default function DiscountsIndex() {
       !persistedScheduleLocked &&
       (Boolean(String(discountEditStartAt || "").trim()) || Boolean(String(discountEditEndAt || "").trim()));
     if (settingNewSchedule) {
-      const ok = typeof window === "undefined" || window.confirm("Schedule can only be set once and cannot be modified later.\n\nDo you want to continue?");
-      if (!ok) return;
+      setShowScheduleConfirmModal(true);
+      return;
     }
     submitDiscountSetup("done");
   }, [scheduleRangeInvalid, persistedScheduleLocked, discountEditStartAt, discountEditEndAt, submitDiscountSetup]);
+  const confirmFinalDiscountSetupSave = useCallback(() => {
+    setShowScheduleConfirmModal(false);
+    submitDiscountSetup("done");
+  }, [submitDiscountSetup]);
 
   const livePreviewSubtotal = Number(previewCartTotal || 0);
   const liveTier1Min = Math.max(0, Number(tier1MinSubtotal || 0));
@@ -11133,6 +11158,50 @@ export default function DiscountsIndex() {
         </div>
       )}
 
+      {showNoticeModal && (
+        <div className="disc-modal-overlay" style={{ zIndex: 2600 }}>
+          <div className="disc-modal" style={{ maxWidth: 520 }}>
+            <div className="disc-modal-header">
+              <span className="disc-modal-title">{noticeTitle || "Notice"}</span>
+              <button className="disc-close-btn" onClick={() => setShowNoticeModal(false)}>✕</button>
+            </div>
+            <div style={{ color: "#374151", fontSize: 14, lineHeight: 1.5 }}>
+              {noticeMessage}
+            </div>
+            <div style={{ marginTop: 16, display: "flex", justifyContent: "flex-end" }}>
+              <button type="button" className="disc-btn disc-btn-primary" onClick={() => setShowNoticeModal(false)}>
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showScheduleConfirmModal && (
+        <div className="disc-modal-overlay" style={{ zIndex: 2500 }}>
+          <div className="disc-modal" style={{ maxWidth: 560 }}>
+            <div className="disc-modal-header">
+              <span className="disc-modal-title">Confirm schedule lock</span>
+              <button className="disc-close-btn" onClick={() => setShowScheduleConfirmModal(false)}>✕</button>
+            </div>
+            <div style={{ color: "#374151", fontSize: 14, lineHeight: 1.5 }}>
+              Schedule can only be set once and cannot be modified later.
+              <br />
+              <br />
+              Do you want to continue?
+            </div>
+            <div style={{ marginTop: 16, display: "flex", justifyContent: "flex-end", gap: 10 }}>
+              <button type="button" className="disc-btn disc-btn-tertiary" onClick={() => setShowScheduleConfirmModal(false)}>
+                Cancel
+              </button>
+              <button type="button" className="disc-btn disc-btn-primary" onClick={confirmFinalDiscountSetupSave}>
+                Continue
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Tier Discount Setup Modal ─────────────────────────────────────── */}
       {showTierDiscountModal && (
         <div className="disc-modal-overlay">
@@ -11495,7 +11564,7 @@ export default function DiscountsIndex() {
                       <span style={{ fontWeight: 600, color: "#111827" }}>
                         {discountEditStartAt || discountEditEndAt
                           ? `${discountEditStartAt || "Now"} → ${discountEditEndAt || "No end"}`
-                          : "Always on"}
+                          : (discountEditActive ? "Always On" : "-")}
                       </span>
                     </div>
                   </div>
@@ -11640,7 +11709,7 @@ export default function DiscountsIndex() {
       </s-section>
 
       {/* ── Errors ────────────────────────────────────────────────────────── */}
-      {(errors?.length || actionData?.errors) && (
+      {(errors?.length || visibleActionErrors) && (
         <s-section heading="Errors">
           <div className="disc-error-card">
             <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
@@ -11656,7 +11725,7 @@ export default function DiscountsIndex() {
                     overflow: "auto", maxHeight: 200, margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-all",
                   }}
                 >
-                  {JSON.stringify(errors || actionData?.errors, null, 2)}
+                  {JSON.stringify(errors || visibleActionErrors, null, 2)}
                 </pre>
               </div>
             </div>

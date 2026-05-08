@@ -1416,6 +1416,7 @@ import {
   parseAdditionalConfig,
   resolveSectionId,
 } from "../lib/additional-ui-config.js";
+import { buildAdditionalTemplate } from "../lib/additional-ui-template.js";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 
@@ -1423,7 +1424,6 @@ import prisma from "../db.server";
 // Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-const ADDITIONAL_UI_BAR_TYPE = "additional_ui";
 const ADDITIONAL_TEMPLATES = [
   {
     id: "promo-stack",
@@ -1543,18 +1543,42 @@ export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
 
-  const rows = await prisma.announcementBar.findMany({
-    where: { shop, barType: ADDITIONAL_UI_BAR_TYPE },
-    orderBy: { updatedAt: "desc" },
-    select: { id: true, configJson: true, updatedAt: true },
-  });
+  let rows = [];
+  try {
+    rows = await prisma.announcementBody.findMany({
+      where: { shop },
+      orderBy: { updatedAt: "desc" },
+      select: {
+        id: true,
+        sectionId: true,
+        bodyJson: true,
+        templateJson: true,
+        updatedAt: true,
+      },
+    });
+  } catch (error) {
+    const message = String(error?.message || "");
+    if (!message.includes("Unknown field `templateJson`")) throw error;
+    rows = await prisma.announcementBody.findMany({
+      where: { shop },
+      orderBy: { updatedAt: "desc" },
+      select: { id: true, sectionId: true, bodyJson: true, updatedAt: true },
+    });
+  }
 
   const blocks = rows.map((row) => {
-    const parsed = parseAdditionalConfig(row.configJson);
+    const parsed = parseAdditionalConfig(row.bodyJson);
     return {
       rowId: row.id,
-      config: { ...parsed, sectionId: resolveSectionId(parsed, row.id) },
+      config: {
+        ...parsed,
+        sectionId: resolveSectionId(
+          { ...parsed, sectionId: row.sectionId || parsed.sectionId },
+          row.id,
+        ),
+      },
       updatedAt: row.updatedAt.toISOString(),
+      templateJson: row.templateJson ?? "{}",
     };
   });
 
@@ -1576,8 +1600,8 @@ export const action = async ({ request }) => {
     const rowId = String(form.get("rowId") || "").trim();
     if (!rowId) return { ok: false, error: "Missing row id." };
 
-    await prisma.announcementBar.deleteMany({
-      where: { id: rowId, shop, barType: ADDITIONAL_UI_BAR_TYPE },
+    await prisma.announcementBody.deleteMany({
+      where: { id: rowId, shop },
     });
     return { ok: true, intent: "delete" };
   }
@@ -1628,32 +1652,60 @@ export const action = async ({ request }) => {
 
   // Guard against duplicate sectionIds within the same shop
   const rowId = String(form.get("rowId") || "").trim();
-  const conflicts = await prisma.announcementBar.findMany({
-    where: { shop, barType: ADDITIONAL_UI_BAR_TYPE },
-    select: { id: true, configJson: true },
+  const conflicts = await prisma.announcementBody.findMany({
+    where: { shop },
+    select: { id: true, sectionId: true, bodyJson: true },
   });
   const hasDuplicateId = conflicts.some((entry) => {
     if (rowId && entry.id === rowId) return false; // skip self on edit
-    return parseAdditionalConfig(entry.configJson).sectionId === config.sectionId;
+    const parsed = parseAdditionalConfig(entry.bodyJson);
+    const existingSectionId = resolveSectionId(
+      { ...parsed, sectionId: entry.sectionId || parsed.sectionId },
+      entry.id,
+    );
+    return existingSectionId === config.sectionId;
   });
   if (hasDuplicateId) {
     return { ok: false, error: "Block ID already exists. Use a unique 12-character ID." };
   }
 
-  const configJson = JSON.stringify(config);
+  const bodyJson = JSON.stringify(config);
+  const templatePayload = buildAdditionalTemplate({
+    name: `Additional UI ${config.sectionId}`,
+    sectionId: config.sectionId,
+    bodyJson,
+    templateJson: String(form.get("templateJson") || ""),
+  });
 
   // Update existing row
   if (rowId) {
-    const updated = await prisma.announcementBar.update({
-      where: { id: rowId },
-      data: {
-        name: `Additional UI ${config.sectionId}`,
-        barType: ADDITIONAL_UI_BAR_TYPE,
-        configJson,
-        active: false,
-      },
-      select: { id: true, updatedAt: true },
-    });
+    let updated;
+    try {
+      updated = await prisma.announcementBody.update({
+        where: { id: rowId },
+        data: {
+          name: `Additional UI ${config.sectionId}`,
+          sectionId: config.sectionId,
+          bodyJson,
+          templateJson: JSON.stringify(templatePayload),
+          active: false,
+        },
+        select: { id: true, updatedAt: true },
+      });
+    } catch (error) {
+      const message = String(error?.message || "");
+      if (!message.includes("Unknown argument `templateJson`")) throw error;
+      updated = await prisma.announcementBody.update({
+        where: { id: rowId },
+        data: {
+          name: `Additional UI ${config.sectionId}`,
+          sectionId: config.sectionId,
+          bodyJson,
+          active: false,
+        },
+        select: { id: true, updatedAt: true },
+      });
+    }
     return {
       ok: true,
       intent: "save",
@@ -1663,19 +1715,33 @@ export const action = async ({ request }) => {
   }
 
   // Create new row
-  const created = await prisma.announcementBar.create({
-    data: {
-      shop,
-      name: `Additional UI ${config.sectionId}`,
-      barType: ADDITIONAL_UI_BAR_TYPE,
-      configJson,
-      active: false,
-      customHtml: "",
-      customLiquid: "",
-      customCss: "",
-    },
-    select: { id: true, updatedAt: true },
-  });
+  let created;
+  try {
+    created = await prisma.announcementBody.create({
+      data: {
+        shop,
+        name: `Additional UI ${config.sectionId}`,
+        sectionId: config.sectionId,
+        bodyJson,
+        templateJson: JSON.stringify(templatePayload),
+        active: false,
+      },
+      select: { id: true, updatedAt: true },
+    });
+  } catch (error) {
+    const message = String(error?.message || "");
+    if (!message.includes("Unknown argument `templateJson`")) throw error;
+    created = await prisma.announcementBody.create({
+      data: {
+        shop,
+        name: `Additional UI ${config.sectionId}`,
+        sectionId: config.sectionId,
+        bodyJson,
+        active: false,
+      },
+      select: { id: true, updatedAt: true },
+    });
+  }
   return {
     ok: true,
     intent: "save",
@@ -2490,6 +2556,13 @@ export default function AdditionalPage() {
                 <input type="hidden" name="intent" value="save" />
                 <input type="hidden" name="rowId" value={editingRowId} />
                 <input type="hidden" name="sectionId" value={editor.sectionId} />
+                <input
+                  type="hidden"
+                  name="templateJson"
+                  value={String(
+                    blocks.find((b) => b.rowId === editingRowId)?.templateJson || "{}",
+                  )}
+                />
 
                 {/* Messages as JSON blob to preserve array structure */}
                 <input

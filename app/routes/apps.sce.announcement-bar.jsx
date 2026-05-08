@@ -1,7 +1,9 @@
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
-import { parseConfig } from "../lib/announcement-bar-config.js";
-import { renderAnnouncementLiquid } from "../utils/announcementLiquid";
+import {
+  resolveSectionHtmlIdFromHeader,
+  templateRenderPayload,
+} from "../lib/announcement-header-template.js";
 
 /**
  * App proxy: GET https://{shop}/apps/sce/announcement-bar?sectionId={sectionId}
@@ -31,13 +33,12 @@ export const loader = async ({ request }) => {
     );
   }
 
-  const bars = await prisma.announcementBar.findMany({
+  const bars = await prisma.announcementHeader.findMany({
     where: { shop },
     orderBy: { updatedAt: "desc" },
   });
   for (const candidate of bars) {
-    const cfg = parseConfig(candidate.configJson);
-    const candidateSectionId = String(cfg.sectionHtmlId || `sce-ab-${candidate.id}`).trim();
+    const candidateSectionId = resolveSectionHtmlIdFromHeader(candidate);
     if (candidateSectionId === sectionId) {
       bar = candidate;
       break;
@@ -55,32 +56,25 @@ export const loader = async ({ request }) => {
     );
   }
 
-  const cfg = parseConfig(bar.configJson);
-  const storedSectionId = String(cfg.sectionHtmlId ?? "").trim();
-  const sectionHtmlId = storedSectionId || `sce-ab-${bar.id}`;
-  const config = { ...cfg };
-  delete config.sectionHtmlId;
-
-  const liquidSrc = String(bar.customLiquid ?? "").trim();
-  let customHtml = bar.customHtml ?? "";
-  if (liquidSrc) {
+  const template = (() => {
     try {
-      const rendered = await renderAnnouncementLiquid(liquidSrc, shop);
-      if (String(rendered ?? "").trim()) customHtml = rendered;
+      return JSON.parse(String(bar.templateJson || "{}"));
     } catch {
-      /* keep stored customHtml on template error */
+      return {};
     }
-  }
+  })();
+  const payload = templateRenderPayload(template, bar);
 
   return Response.json({
     ok: true,
     id: bar.id,
-    sectionHtmlId,
+    sectionHtmlId: payload.sectionHtmlId,
     version: `${bar.id}:${bar.updatedAt?.toISOString?.() || ""}`,
     updatedAt: bar.updatedAt?.toISOString?.() || null,
-    barType: bar.barType,
-    config,
-    customHtml,
-    customCss: bar.customCss ?? "",
+    barType: payload.barType,
+    config: payload.config,
+    customHtml: payload.customHtml,
+    customCss: payload.customCss,
+    template,
   });
 };

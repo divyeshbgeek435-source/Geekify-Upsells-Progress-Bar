@@ -45,6 +45,7 @@ function parseDateInput(value) {
 
 function resolveTierStatus(tier, now = new Date()) {
   if (!tier) return "INACTIVE";
+  if (tier.active === false) return "INACTIVE";
   const start = parseDateInput(tier.scheduleStartAt);
   const end = parseDateInput(tier.scheduleEndAt);
   if (start && now < start) return "SCHEDULED";
@@ -124,58 +125,20 @@ export const loader = async ({ request }) => {
       tierDiscounts = [];
     }
   }
-  const activeDiscountNames = new Set(
-    tierDiscounts
-      .filter((discount) => resolveDiscountStatus(discount, now) === "ACTIVE")
-      .map((discount) => String(discount.name || "").trim()),
+  const discountByName = new Map(
+    tierDiscounts.map((discount) => [String(discount.name || "").trim(), discount]),
   );
-  const eligibleTiers =
-    tierDiscounts.length > 0
-      ? tierRules.filter((tier) =>
-          activeDiscountNames.has(String(tier.discountName || "").trim()),
-        )
-      : tierRules;
+  const eligibleTiers = tierRules.filter((tier) => {
+    const linked = discountByName.get(String(tier.discountName || "").trim());
+    if (!linked) return true;
+    return resolveDiscountStatus(linked, now) === "ACTIVE";
+  });
   const tierWidgetSettings =
     shop && typeof prisma.tierWidgetSettings?.findUnique === "function"
       ? await prisma.tierWidgetSettings.findUnique({
           where: { shop },
         })
       : null;
-  let rawWidgetSettings = null;
-  try {
-    const rows = await prisma.$queryRaw`
-      SELECT
-        sequentialMsg0,
-        sequentialMsg1,
-        sequentialMsg2,
-        sequentialHintZero,
-        sequentialHintMid,
-        tier1Icon,
-        tier2Icon,
-        subtotalLabel,
-        estimatedShippingLabel,
-        widgetBackgroundColor,
-        widgetTextColor,
-        widgetBorderColor,
-        widgetUseCustomColors,
-        tier1LabelText,
-        tier2LabelText,
-        minAmountPrefixText,
-        showTierIcons,
-        showTierLabels,
-        showTierMinimums,
-        widgetDynamicConfigJson,
-        selectorTargets,
-        nameTargetSelectors,
-        sequentialTitle
-      FROM "TierWidgetSettings"
-      WHERE shop = ${shop}
-      LIMIT 1
-    `;
-    rawWidgetSettings = Array.isArray(rows) && rows.length ? rows[0] : null;
-  } catch {
-    rawWidgetSettings = null;
-  }
 
   let appliedTier = null;
   if (Number.isFinite(subtotalMinor) && subtotalMinor > 0) {
@@ -198,7 +161,6 @@ export const loader = async ({ request }) => {
   let widgetDynamicConfig = {};
   try {
     const rawDynamic =
-      rawWidgetSettings?.widgetDynamicConfigJson ??
       tierWidgetSettings?.widgetDynamicConfigJson ??
       "{}";
     const parsed = JSON.parse(String(rawDynamic || "{}"));
@@ -213,84 +175,68 @@ export const loader = async ({ request }) => {
     tiers: visibleTiers,
     appliedTier,
     sequentialMsg0:
-      rawWidgetSettings?.sequentialMsg0 ||
       tierWidgetSettings?.sequentialMsg0 ||
       "Unlock Tier 1 to apply your cart discount. Then unlock Tier 2 for free shipping.",
     sequentialMsg1:
-      rawWidgetSettings?.sequentialMsg1 ||
       tierWidgetSettings?.sequentialMsg1 ||
       "Apply discount to unlock free shipping",
     sequentialMsg2:
-      rawWidgetSettings?.sequentialMsg2 ||
       tierWidgetSettings?.sequentialMsg2 ||
       "Free shipping unlocked",
     sequentialHintZero:
-      rawWidgetSettings?.sequentialHintZero ||
       tierWidgetSettings?.sequentialHintZero ||
       "Progress: 0% — unlock Tier 1 to start.",
     sequentialHintMid:
-      rawWidgetSettings?.sequentialHintMid ||
       tierWidgetSettings?.sequentialHintMid ||
       "Progress: 50% — unlock Tier 2 for free shipping.",
     tier1Icon:
-      rawWidgetSettings?.tier1Icon || tierWidgetSettings?.tier1Icon || "%",
+      tierWidgetSettings?.tier1Icon || "%",
     tier2Icon:
-      rawWidgetSettings?.tier2Icon || tierWidgetSettings?.tier2Icon || "🚚",
+      tierWidgetSettings?.tier2Icon || "🚚",
     subtotalLabel:
-      rawWidgetSettings?.subtotalLabel ||
       tierWidgetSettings?.subtotalLabel ||
       "Current subtotal",
     estimatedShippingLabel:
-      rawWidgetSettings?.estimatedShippingLabel ||
       tierWidgetSettings?.estimatedShippingLabel ||
       "Estimated shipping",
     widgetBackgroundColor:
-      rawWidgetSettings?.widgetBackgroundColor ||
       tierWidgetSettings?.widgetBackgroundColor ||
       "#ffffff",
     widgetTextColor:
-      rawWidgetSettings?.widgetTextColor ||
       tierWidgetSettings?.widgetTextColor ||
       "#111827",
     widgetBorderColor:
-      rawWidgetSettings?.widgetBorderColor ||
       tierWidgetSettings?.widgetBorderColor ||
       "#d1d5db",
     widgetUseCustomColors: Boolean(
-      rawWidgetSettings?.widgetUseCustomColors ?? tierWidgetSettings?.widgetUseCustomColors ?? false,
+      tierWidgetSettings?.widgetUseCustomColors ?? false,
     ),
     tier1LabelText:
-      rawWidgetSettings?.tier1LabelText ||
       tierWidgetSettings?.tier1LabelText ||
       "Discount",
     tier2LabelText:
-      rawWidgetSettings?.tier2LabelText ||
       tierWidgetSettings?.tier2LabelText ||
       "Free shipping",
     minAmountPrefixText:
-      rawWidgetSettings?.minAmountPrefixText ||
       tierWidgetSettings?.minAmountPrefixText ||
       "Min.",
     showTierIcons: Boolean(
-      rawWidgetSettings?.showTierIcons ?? tierWidgetSettings?.showTierIcons ?? true,
+      tierWidgetSettings?.showTierIcons ?? true,
     ),
     showTierLabels: Boolean(
-      rawWidgetSettings?.showTierLabels ?? tierWidgetSettings?.showTierLabels ?? true,
+      tierWidgetSettings?.showTierLabels ?? true,
     ),
     showTierMinimums: Boolean(
-      rawWidgetSettings?.showTierMinimums ?? tierWidgetSettings?.showTierMinimums ?? true,
+      tierWidgetSettings?.showTierMinimums ?? true,
     ),
     widgetDynamicConfig,
     selectorTargets:
-      rawWidgetSettings?.selectorTargets ||
       tierWidgetSettings?.selectorTargets ||
       ".product__info-container, .cart-drawer__content, .drawer__inner, form[action='/cart'], .cart__blocks",
     nameTargetSelectors:
-      rawWidgetSettings?.nameTargetSelectors ||
       tierWidgetSettings?.nameTargetSelectors ||
       ".cart-drawer__content, .drawer__inner, .drawer__header, form[action='/cart'], .cart__blocks",
     sequentialTitle:
-      rawWidgetSettings?.sequentialTitle ||
       tierWidgetSettings?.sequentialTitle ||
       "Rewards progress",
   });

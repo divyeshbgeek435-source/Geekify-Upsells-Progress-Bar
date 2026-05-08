@@ -3745,6 +3745,7 @@ import {
 } from "../lib/popup-design-templates.js";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
+import { buildPopupTemplate } from "../lib/popup-design-template.js";
 
 const POPUP_BAR_TYPE = "popup_design";
 
@@ -3850,15 +3851,15 @@ function fromDatetimeLocalValue(local) {
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
-  const rows = await prisma.announcementBar.findMany({
-    where: { shop, barType: POPUP_BAR_TYPE },
+  const rows = await prisma.popupDesign.findMany({
+    where: { shop },
     orderBy: { updatedAt: "desc" },
-    select: { id: true, name: true, configJson: true, updatedAt: true },
+    select: { id: true, name: true, popupDesignId: true, configJson: true, templateJson: true, updatedAt: true },
   });
   const popups = rows.map((row) => {
     const raw = parsePopupDesignConfig(row.configJson);
-    const config = { ...raw, popupDesignId: resolvePopupDesignId(raw, row.id) };
-    return { id: row.id, name: row.name, savedAt: row.updatedAt.toISOString(), config };
+    const config = { ...raw, popupDesignId: row.popupDesignId || resolvePopupDesignId(raw, row.id) };
+    return { id: row.id, name: row.name, savedAt: row.updatedAt.toISOString(), config, templateJson: row.templateJson ?? "{}" };
   });
   return { popups };
 };
@@ -3934,8 +3935,11 @@ export const action = async ({ request }) => {
   if (intent === "create") {
     const name = String(form.get("popupName") || "Untitled popup").trim() || "Untitled popup";
     const cfg = defaultPopupDesignConfig();
-    const row = await prisma.announcementBar.create({
-      data: { shop, name, barType: POPUP_BAR_TYPE, configJson: JSON.stringify(cfg), active: false, customHtml: "", customLiquid: "", customCss: "" },
+    cfg.popupDesignId = String(cfg.popupDesignId || "").trim() || generatePopupDesignId();
+    const configJson = JSON.stringify(cfg);
+    const templatePayload = buildPopupTemplate({ name, popupDesignId: cfg.popupDesignId, configJson, templateJson: "{}" });
+    const row = await prisma.popupDesign.create({
+      data: { shop, name, popupDesignId: cfg.popupDesignId, configJson, templateJson: JSON.stringify(templatePayload), active: false },
       select: { id: true, updatedAt: true },
     });
     return { ok: true, intent: "create", rowId: row.id, savedAt: row.updatedAt.toISOString() };
@@ -3947,8 +3951,10 @@ export const action = async ({ request }) => {
     let cfg;
     try { cfg = parsePopupDesignConfig(rawJson); } catch { return { ok: false, error: "Invalid popup configuration." }; }
     cfg.popupDesignId = String(cfg.popupDesignId || "").trim() || generatePopupDesignId();
-    const row = await prisma.announcementBar.create({
-      data: { shop, name, barType: POPUP_BAR_TYPE, configJson: JSON.stringify(cfg), active: false, customHtml: "", customLiquid: "", customCss: "" },
+    const configJson = JSON.stringify(cfg);
+    const templatePayload = buildPopupTemplate({ name, popupDesignId: cfg.popupDesignId, configJson, templateJson: "{}" });
+    const row = await prisma.popupDesign.create({
+      data: { shop, name, popupDesignId: cfg.popupDesignId, configJson, templateJson: JSON.stringify(templatePayload), active: false },
       select: { id: true, updatedAt: true },
     });
     return { ok: true, intent: "create_with_config", rowId: row.id, savedAt: row.updatedAt.toISOString() };
@@ -3956,21 +3962,24 @@ export const action = async ({ request }) => {
 
   if (intent === "delete") {
     const rowId = String(form.get("rowId") || "").trim();
-    const existing = await prisma.announcementBar.findFirst({ where: { id: rowId, shop, barType: POPUP_BAR_TYPE }, select: { id: true } });
+    const existing = await prisma.popupDesign.findFirst({ where: { id: rowId, shop }, select: { id: true } });
     if (!existing) return { ok: false, error: "Popup not found." };
-    await prisma.announcementBar.delete({ where: { id: existing.id } });
+    await prisma.popupDesign.delete({ where: { id: existing.id } });
     return { ok: true, intent: "delete", deletedId: rowId };
   }
 
   if (intent === "duplicate") {
     const rowId = String(form.get("rowId") || "").trim();
-    const src = await prisma.announcementBar.findFirst({ where: { id: rowId, shop, barType: POPUP_BAR_TYPE } });
+    const src = await prisma.popupDesign.findFirst({ where: { id: rowId, shop } });
     if (!src) return { ok: false, error: "Popup not found." };
     const parsed = parsePopupDesignConfig(src.configJson);
     const next = { ...parsed, popupDesignId: generatePopupDesignId() };
     const config = parsePopupDesignConfig(JSON.stringify(next));
-    const row = await prisma.announcementBar.create({
-      data: { shop, name: `${src.name} (copy)`.slice(0, 120), barType: POPUP_BAR_TYPE, configJson: JSON.stringify(config), active: false, customHtml: "", customLiquid: "", customCss: "" },
+    const name = `${src.name} (copy)`.slice(0, 120);
+    const configJson = JSON.stringify(config);
+    const templatePayload = buildPopupTemplate({ name, popupDesignId: next.popupDesignId, configJson, templateJson: src.templateJson ?? "{}" });
+    const row = await prisma.popupDesign.create({
+      data: { shop, name, popupDesignId: next.popupDesignId, configJson, templateJson: JSON.stringify(templatePayload), active: false },
       select: { id: true, updatedAt: true },
     });
     return { ok: true, intent: "duplicate", rowId: row.id, savedAt: row.updatedAt.toISOString() };
@@ -3979,13 +3988,16 @@ export const action = async ({ request }) => {
   if (intent !== "save") return { ok: false, error: "Unknown action." };
   const rowId = String(form.get("rowId") || "").trim();
   if (!rowId) return { ok: false, error: "Select a popup to save." };
-  const owned = await prisma.announcementBar.findFirst({ where: { id: rowId, shop, barType: POPUP_BAR_TYPE }, select: { id: true } });
+  const owned = await prisma.popupDesign.findFirst({ where: { id: rowId, shop }, select: { id: true, templateJson: true, popupDesignId: true } });
   if (!owned) return { ok: false, error: "Popup not found." };
   const config = buildConfigPayload(form);
   const popupName = String(form.get("popupName") || "").trim() || "Popup";
-  const updated = await prisma.announcementBar.update({
+  const configJson = JSON.stringify(config);
+  const designId = String(config.popupDesignId || owned.popupDesignId || "").trim() || generatePopupDesignId();
+  const templatePayload = buildPopupTemplate({ name: popupName, popupDesignId: designId, configJson, templateJson: owned.templateJson ?? "{}" });
+  const updated = await prisma.popupDesign.update({
     where: { id: owned.id },
-    data: { name: popupName, barType: POPUP_BAR_TYPE, configJson: JSON.stringify(config), active: false },
+    data: { name: popupName, popupDesignId: designId, configJson, templateJson: JSON.stringify(templatePayload), active: false },
     select: { id: true, updatedAt: true },
   });
   return { ok: true, intent: "save", rowId: updated.id, savedAt: updated.updatedAt.toISOString() };
