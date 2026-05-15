@@ -8,6 +8,7 @@ const APP_EMBED_BLOCK_HANDLE = "free-shipping-progress-embed";
 const CART_PAGE_BLOCK_HANDLE = "free-shipping-progress-block";
 const ADDITIONAL_UI_BLOCK_HANDLE = "additional-ui-block";
 const POPUP_DESIGN_BLOCK_HANDLE = "popup-design-block";
+const POPUP_DESIGN_EMBED_HANDLE = "popup-design-embed";
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
@@ -35,6 +36,10 @@ export const loader = async ({ request }) => {
     addAppBlockId: `${clientId}/${POPUP_DESIGN_BLOCK_HANDLE}`,
     target: "newAppsSection",
   });
+  const popupDesignEmbedQuery = new URLSearchParams({
+    context: "apps",
+    activateAppId: `${clientId}/${POPUP_DESIGN_EMBED_HANDLE}`,
+  });
 
   const editorBase = `https://admin.shopify.com/store/${storeHandle}/themes/current/editor`;
 
@@ -46,14 +51,17 @@ export const loader = async ({ request }) => {
     cartBlockEditorUrl: `${editorBase}?${cartBlockQuery.toString()}`,
     additionalUiBlockEditorUrl: `${editorBase}?${additionalUiBlockQuery.toString()}`,
     popupDesignBlockEditorUrl: `${editorBase}?${popupDesignBlockQuery.toString()}`,
+    popupDesignEmbedEditorUrl: `${editorBase}?${popupDesignEmbedQuery.toString()}`,
     legacyAppEmbedUrl: `https://${shop}/admin/themes/current/editor?${appEmbedQuery.toString()}`,
     legacyCartBlockUrl: `https://${shop}/admin/themes/current/editor?${cartBlockQuery.toString()}`,
     legacyAdditionalUiBlockUrl: `https://${shop}/admin/themes/current/editor?${additionalUiBlockQuery.toString()}`,
     legacyPopupDesignBlockUrl: `https://${shop}/admin/themes/current/editor?${popupDesignBlockQuery.toString()}`,
+    legacyPopupDesignEmbedUrl: `https://${shop}/admin/themes/current/editor?${popupDesignEmbedQuery.toString()}`,
     appEmbedHandle: APP_EMBED_BLOCK_HANDLE,
     cartBlockHandle: CART_PAGE_BLOCK_HANDLE,
     additionalUiBlockHandle: ADDITIONAL_UI_BLOCK_HANDLE,
     popupDesignBlockHandle: POPUP_DESIGN_BLOCK_HANDLE,
+    popupDesignEmbedHandle: POPUP_DESIGN_EMBED_HANDLE,
   };
 
   return { apiKey: apiKeyForBridge, onboarding };

@@ -1,22 +1,13 @@
-import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
+import {
+  authenticateAppProxyRequest,
+  shopVariantsForLookup,
+} from "../lib/app-proxy.server.js";
 import {
   resolveSectionHtmlIdFromHeader,
   templateRenderPayload,
 } from "../lib/announcement-header-template.js";
 import { announcementSectionHtmlIdsMatch } from "../lib/announcement-section-html-id.js";
-
-function normalizeProxyShop(raw) {
-  return String(raw ?? "").trim();
-}
-
-/** Shopify session shop + DB row occasionally differ only by case; SQLite compares exact strings. */
-function shopVariantsForLookup(shop) {
-  const s = normalizeProxyShop(shop);
-  if (!s) return [];
-  const lower = s.toLowerCase();
-  return [...new Set([s, lower])];
-}
 
 function normalizeIncomingSectionId(raw) {
   let s = String(raw ?? "").trim();
@@ -35,32 +26,10 @@ function normalizeIncomingSectionId(raw) {
  * Requires [app_proxy] in shopify.app.toml (subpath sce).
  */
 export const loader = async ({ request }) => {
-  let session;
-  try {
-    const ctx = await authenticate.public.appProxy(request);
-    session = ctx.session;
-  } catch (thrown) {
-    /** Shopify auth throws `Response` with empty body when HMAC fails - browsers then see "empty body". */
-    if (thrown instanceof Response) {
-      const st = thrown.status;
-      if (st === 400 || st === 401) {
-        return Response.json(
-          {
-            ok: false,
-            error: "app_proxy_auth_failed",
-            hint:
-              "Shopify could not verify this app-proxy request (missing or invalid signature). Load the storefront from your shop domain so requests go through Shopify - do not open this URL on the app tunnel host. Run shopify app dev for local dev; in Partners → App setup → App proxy, confirm proxy URL, prefix apps, subpath sce, and API secret match this app.",
-          },
-          { status: st },
-        );
-      }
-      return thrown;
-    }
-    throw thrown;
-  }
+  const { shop, errorResponse } = await authenticateAppProxyRequest(request);
+  if (errorResponse) return errorResponse;
 
   const url = new URL(request.url);
-  const shop = normalizeProxyShop(session?.shop || url.searchParams.get("shop") || "");
   const sectionId = normalizeIncomingSectionId(url.searchParams.get("sectionId"));
 
   if (!shop) {

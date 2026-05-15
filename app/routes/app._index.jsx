@@ -952,7 +952,14 @@ function SetupGuideSection({ onboarding, setupDetection, withShopifyParams }) {
                     <p className="setup-guide-hint">
                       The app cannot see your theme editor. After the embed is turned <strong>on</strong> and you have
                       clicked <strong>Save</strong> in the theme editor, click <strong>Confirm app embed is saved</strong>{" "}
-                      above—this step will show as completed.
+                      above—this step will show as completed. For popups on product or cart pages, also enable{" "}
+                      <strong>Popup design (site-wide)</strong> under App embeds and paste your Popup design ID there.
+                    </p>
+                    <p className="setup-guide-hint">
+                      After deploy, open{" "}
+                      <code>https://YOUR-STORE.myshopify.com/apps/sce/health</code> in a browser—you should see JSON with{" "}
+                      <code>&quot;ok&quot;:true</code>. If not, run <code>shopify app deploy</code> and re-open the app in admin to
+                      accept the <code>write_app_proxy</code> scope.
                     </p>
                   </div>
                 ) : null}

@@ -215,7 +215,7 @@
 
 .sce-popup-right--align-center .sce-popup-email-row {
   width: 100%;
-  max-width: 320px;
+  /* max-width: 320px; */
 }
 
 .sce-popup-right--align-center .sce-popup-cta {
@@ -322,6 +322,7 @@
 .sce-popup-countdown--labeled {
   align-items: flex-end;
   gap: 4px 6px;
+  justify-content: center;
 }
 
 .sce-popup-countdown__unit {
@@ -383,6 +384,7 @@
   gap: 12px;
   flex: 1;
   min-width: 0;
+  align-items: center;
 }
 
 .sce-popup-success {

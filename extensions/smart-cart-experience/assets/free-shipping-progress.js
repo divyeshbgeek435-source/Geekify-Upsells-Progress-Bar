@@ -334,11 +334,31 @@
     return false;
   }
 
+  var proxyFetchWarned = false;
   function safeFetchJson(url) {
     return fetch(url, { credentials: "same-origin" })
       .then(function (r) {
-        if (!r.ok) throw new Error("Request failed");
+        if (!r.ok) {
+          if (!proxyFetchWarned) {
+            proxyFetchWarned = true;
+            console.warn(
+              "[SCE] App proxy request failed:",
+              url,
+              "HTTP",
+              r.status,
+              "- Run shopify app deploy, enable write_app_proxy, and open https://YOUR-STORE.myshopify.com/apps/sce/health in the browser.",
+            );
+          }
+          throw new Error("Request failed");
+        }
         return r.json();
+      })
+      .then(function (data) {
+        if (data && data.error === "app_proxy_auth_failed" && !proxyFetchWarned) {
+          proxyFetchWarned = true;
+          console.warn("[SCE] App proxy auth failed:", data.hint || data.error);
+        }
+        return data;
       })
       .catch(function () {
         return null;

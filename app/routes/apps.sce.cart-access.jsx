@@ -1,5 +1,9 @@
-import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
+import {
+  authenticateAppProxyRequest,
+  prismaShopInClause,
+  shopVariantsForLookup,
+} from "../lib/app-proxy.server.js";
 import { mergeProgressBarDesign } from "../lib/progress-bar-design.js";
 
 const lastPingLogAtByShop = new Map();
@@ -83,10 +87,12 @@ function isMissingTableError(error, tableName) {
 
 async function deactivateExpiredTierDiscountsForShop(shop) {
   if (typeof prisma.tierDiscount?.updateMany !== "function") return;
+  const shopWhere = prismaShopInClause(shop);
+  if (!shopWhere) return;
   try {
     await prisma.tierDiscount.updateMany({
       where: {
-        shop,
+        ...shopWhere,
         active: true,
         scheduleEndAt: { lt: new Date() },
       },
@@ -97,6 +103,20 @@ async function deactivateExpiredTierDiscountsForShop(shop) {
   }
 }
 
+async function loadTierWidgetSettingsForShop(shop) {
+  if (!shop || typeof prisma.tierWidgetSettings?.findUnique !== "function") return null;
+  const shopWhere = prismaShopInClause(shop);
+  if (shopWhere && typeof prisma.tierWidgetSettings?.findMany === "function") {
+    const rows = await prisma.tierWidgetSettings.findMany({ where: shopWhere, take: 1 });
+    return rows[0] ?? null;
+  }
+  for (const variant of shopVariantsForLookup(shop)) {
+    const row = await prisma.tierWidgetSettings.findUnique({ where: { shop: variant } });
+    if (row) return row;
+  }
+  return null;
+}
+
 /**
  * App Proxy route (storefront → your app, HMAC-verified).
  * Storefront URL: https://{shop}/apps/sce/cart-access
@@ -104,9 +124,13 @@ async function deactivateExpiredTierDiscountsForShop(shop) {
  * Configure in shopify.app.toml [app_proxy] and run deploy / dev so Shopify registers the proxy.
  */
 export const loader = async ({ request }) => {
-  const { session } = await authenticate.public.appProxy(request);
+  const { shop, errorResponse } = await authenticateAppProxyRequest(request);
+  if (errorResponse) return errorResponse;
+  const shopWhere = prismaShopInClause(shop);
+  if (!shopWhere) {
+    return Response.json({ ok: false, error: "missing_shop" }, { status: 400 });
+  }
   const url = new URL(request.url);
-  const shop = session?.shop || url.searchParams.get("shop") || "";
   const subtotalMinor = Number(url.searchParams.get("subtotalCents") || 0);
   const currency = String(url.searchParams.get("currency") || "").trim();
   const exp = currencyExponent(currency);
@@ -114,7 +138,7 @@ export const loader = async ({ request }) => {
   try {
     await prisma.thresholdTier.updateMany({
       where: {
-        shop,
+        ...shopWhere,
         active: true,
         scheduleEndAt: { lt: now },
       },
@@ -125,14 +149,14 @@ export const loader = async ({ request }) => {
   }
   await deactivateExpiredTierDiscountsForShop(shop);
   const tierRules = await prisma.thresholdTier.findMany({
-    where: { shop },
+    where: shopWhere,
     orderBy: [{ minSubtotal: "asc" }, { position: "asc" }],
   });
   let tierDiscounts = [];
   if (typeof prisma.tierDiscount?.findMany === "function") {
     try {
       tierDiscounts = await prisma.tierDiscount.findMany({
-        where: { shop },
+        where: shopWhere,
       });
     } catch (error) {
       if (!isMissingTableError(error, "TierDiscount")) throw error;
@@ -149,12 +173,7 @@ export const loader = async ({ request }) => {
     if (!linked) return false;
     return resolveDiscountStatus(linked, now) === "ACTIVE";
   });
-  const tierWidgetSettings =
-    shop && typeof prisma.tierWidgetSettings?.findUnique === "function"
-      ? await prisma.tierWidgetSettings.findUnique({
-          where: { shop },
-        })
-      : null;
+  const tierWidgetSettings = await loadTierWidgetSettingsForShop(shop);
 
   let appliedTier = null;
   if (Number.isFinite(subtotalMinor) && subtotalMinor > 0) {
@@ -262,9 +281,8 @@ export const loader = async ({ request }) => {
 };
 
 export const action = async ({ request }) => {
-  const { session } = await authenticate.public.appProxy(request);
-  const url = new URL(request.url);
-  const shop = session?.shop || url.searchParams.get("shop") || "";
+  const { session, shop, errorResponse } = await authenticateAppProxyRequest(request);
+  if (errorResponse) return errorResponse;
 
   let payload = {};
   try {

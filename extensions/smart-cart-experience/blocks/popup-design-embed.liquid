@@ -1,0 +1,33 @@
+{% comment %}
+  Site-wide app embed: loads on every template when enabled under Theme → App embeds.
+  Paste the Popup design ID from the app (Popup design page).
+{% endcomment %}
+
+{{ 'popup-design.css' | asset_url | stylesheet_tag }}
+
+<script
+  src="{{ 'popup-design.js' | asset_url }}"
+  data-sce-popup=""
+  data-sce-popup-design-id="{{ block.settings.popup_design_id | escape }}"
+  data-api-url="{{ shop.secure_url }}/apps/sce/popup-design?popup_design_id={{ block.settings.popup_design_id | url_encode }}"
+  defer
+></script>
+
+{% schema %}
+{
+  "name": "Popup design (site-wide)",
+  "target": "body",
+  "settings": [
+    {
+      "type": "paragraph",
+      "content": "Create popups in the app, copy the Popup design ID, and paste it below. Required for the popup to appear. Use this embed when targeting product, collection, cart, or custom URLs—the section block only runs where that section exists."
+    },
+    {
+      "type": "text",
+      "id": "popup_design_id",
+      "label": "Popup design ID",
+      "info": "Must match the ID from the app exactly."
+    }
+  ]
+}
+{% endschema %}

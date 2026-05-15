@@ -1261,7 +1261,17 @@
         }
         scheduleShow(cfg);
       })
-      .catch(function () {});
+      .catch(function (err) {
+        if (!window.__scePopupProxyWarned) {
+          window.__scePopupProxyWarned = true;
+          console.warn(
+            "[SCE Popup] Could not load popup config from app proxy:",
+            apiUrl,
+            err && err.message ? err.message : err,
+            "- Deploy the app with [app_proxy], paste Popup design ID in Theme → App embeds → Popup design (site-wide), and test https://YOUR-STORE.myshopify.com/apps/sce/health",
+          );
+        }
+      });
   }
 
   refresh();

@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { GraphqlQueryError } from "@shopify/shopify-api";
 import { SessionNotFoundError } from "@shopify/shopify-app-react-router/server";
-import shopify, { authenticate } from "../shopify.server";
+import shopify from "../shopify.server";
+import { authenticateAppProxyRequest, prismaShopInClause } from "../lib/app-proxy.server.js";
 import { parsePopupDesignConfig, resolvePopupDesignId } from "../lib/popup-design-config.js";
 import { templateRenderPayload } from "../lib/popup-design-template.js";
 import prisma from "../db.server";
@@ -9,10 +10,10 @@ import prisma from "../db.server";
 const BAR_TYPE = "popup_design";
 
 /** Tag applied to customers created from the storefront popup (override with POPUP_CUSTOMER_APP_TAG). */
-const POPUP_CUSTOMER_SOURCE_TAG = String(process.env.POPUP_CUSTOMER_APP_TAG || process.env.SHOPIFY_APP_NAME || "cart")
+const POPUP_CUSTOMER_SOURCE_TAG = String(process.env.POPUP_CUSTOMER_APP_TAG || process.env.SHOPIFY_APP_NAME || "Geekify: Upsells, Progress Bar")
   .trim()
   .replace(/[^a-zA-Z0-9 _-]/g, "")
-  .slice(0, 60) || "cart";
+  .slice(0, 60) || "Geekify: Upsells, Progress Bar";
 
 /** Request only `id` on the created customer to reduce Protected Customer Data exposure on read-back. */
 const CUSTOMER_CREATE_MUTATION = `#graphql
@@ -149,9 +150,8 @@ function isValidPopupSignupEmail(raw) {
 }
 
 export const loader = async ({ request }) => {
-  const { session } = await authenticate.public.appProxy(request);
+  const { shop, errorResponse } = await authenticateAppProxyRequest(request);
   const url = new URL(request.url);
-  const shop = (session?.shop || url.searchParams.get("shop") || "").trim();
   const noStoreJson = (data, status) =>
     new Response(JSON.stringify(data), {
       status,
@@ -161,7 +161,9 @@ export const loader = async ({ request }) => {
       },
     });
 
-  if (!shop) {
+  if (errorResponse) return errorResponse;
+  const shopWhere = prismaShopInClause(shop);
+  if (!shopWhere) {
     return noStoreJson({ ok: false, error: "missing_shop" }, 400);
   }
 
@@ -172,7 +174,7 @@ export const loader = async ({ request }) => {
   ).trim();
 
   const rows = await prisma.popupDesign.findMany({
-    where: { shop },
+    where: shopWhere,
     orderBy: { updatedAt: "desc" },
     select: { id: true, updatedAt: true, popupDesignId: true, configJson: true, templateJson: true },
   });
@@ -305,10 +307,11 @@ export const action = async ({ request }) => {
     return jsonNoStore({ ok: false, error: "method_not_allowed" }, 405);
   }
 
-  const { session } = await authenticate.public.appProxy(request);
+  const { shop, errorResponse } = await authenticateAppProxyRequest(request);
   const url = new URL(request.url);
-  const shop = (session?.shop || url.searchParams.get("shop") || "").trim();
-  if (!shop) {
+  if (errorResponse) return errorResponse;
+  const shopWhere = prismaShopInClause(shop);
+  if (!shopWhere) {
     return jsonNoStore({ ok: false, error: "missing_shop" }, 400);
   }
 
@@ -337,7 +340,7 @@ export const action = async ({ request }) => {
   }
 
   const rows = await prisma.popupDesign.findMany({
-    where: { shop },
+    where: shopWhere,
     select: { id: true, popupDesignId: true, configJson: true, templateJson: true },
   });
 

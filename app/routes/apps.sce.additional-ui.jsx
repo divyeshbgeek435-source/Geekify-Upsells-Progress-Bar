@@ -1,25 +1,26 @@
-import { authenticate } from "../shopify.server";
 import {
   defaultAdditionalConfig,
   parseAdditionalConfig,
   resolveSectionId,
 } from "../lib/additional-ui-config.js";
+import { authenticateAppProxyRequest, prismaShopInClause } from "../lib/app-proxy.server.js";
 import { templateRenderPayload } from "../lib/additional-ui-template.js";
 import prisma from "../db.server";
 
 export const loader = async ({ request }) => {
-  const { session } = await authenticate.public.appProxy(request);
-  const url = new URL(request.url);
-  const shop = (session?.shop || url.searchParams.get("shop") || "").trim();
-  const sectionId = String(url.searchParams.get("sectionId") || "").trim().toLowerCase();
-  if (!shop) {
+  const { shop, errorResponse } = await authenticateAppProxyRequest(request);
+  if (errorResponse) return errorResponse;
+  const shopWhere = prismaShopInClause(shop);
+  if (!shopWhere) {
     return Response.json({ ok: false, error: "missing_shop" }, { status: 400 });
   }
+  const url = new URL(request.url);
+  const sectionId = String(url.searchParams.get("sectionId") || "").trim().toLowerCase();
 
   let rows = [];
   try {
     rows = await prisma.announcementBody.findMany({
-      where: { shop },
+      where: shopWhere,
       orderBy: { updatedAt: "desc" },
       select: {
         id: true,
@@ -33,7 +34,7 @@ export const loader = async ({ request }) => {
     const message = String(error?.message || "");
     if (!message.includes("Unknown field `templateJson`")) throw error;
     rows = await prisma.announcementBody.findMany({
-      where: { shop },
+      where: shopWhere,
       orderBy: { updatedAt: "desc" },
       select: { id: true, sectionId: true, updatedAt: true, bodyJson: true },
     });
