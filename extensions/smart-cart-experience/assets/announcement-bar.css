@@ -7,11 +7,26 @@
   -webkit-font-smoothing: antialiased;
 }
 
-/* .sce-announcement-bar--sticky {
-  /* position: fixed; */
-  /* top: 0;/ */
-  /* z-index: var(--sce-ab-z, 1000); */
-/* } */ */
+/*
+ * Theme sections often wrap app blocks in .page-width (max-width column).
+ * Break the hook out to the full viewport so the bar spans edge-to-edge.
+ */
+.sce-announcement-bar-block-hook {
+  box-sizing: border-box;
+  width: 100vw;
+  max-width: none;
+  margin-left: calc(50% - 50vw);
+  margin-right: calc(50% - 50vw);
+  position: relative;
+}
+
+.sce-announcement-bar--sticky {
+ 
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: var(--sce-ab-z, 1000);
+}
 
 /* Theme app block: bar lives inside the block hook (normal document flow). */
 .sce-announcement-bar--inline {
@@ -80,14 +95,35 @@
 }
 
 .sce-announcement-bar__track {
-  display: inline-flex;
-  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  width: max-content;
+  min-width: 100%;
   will-change: transform;
   animation: sce-ab-marquee var(--sce-ab-marquee-duration, 22s) linear infinite;
 }
 
 .sce-announcement-bar__track:hover {
-  animation-play-state: paused;
+  animation-play-state: var(--sce-ab-marquee-hover-play-state, running);
+}
+
+.sce-announcement-bar__segment {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.sce-announcement-bar__marquee-item {
+  display: inline-flex;
+  align-items: center;
+}
+
+.sce-announcement-bar__marquee-separator {
+  display: inline-flex;
+  align-items: center;
+  padding-inline: calc(var(--sce-ab-separator-gap, 16px) / 2);
+  opacity: 0.8;
 }
 
 @keyframes sce-ab-marquee {
@@ -95,7 +131,7 @@
     transform: translateX(0);
   }
   100% {
-    transform: translateX(-50%);
+    transform: translateX(calc(-1 * var(--sce-ab-loop-width, 50%)));
   }
 }
 
@@ -197,8 +233,3 @@
   transform: translateY(-1px);
 }
 
-.sce-announcement-bar__spacer {
-  display: block;
-  height: var(--sce-ab-height, 0px);
-  pointer-events: none;
-}

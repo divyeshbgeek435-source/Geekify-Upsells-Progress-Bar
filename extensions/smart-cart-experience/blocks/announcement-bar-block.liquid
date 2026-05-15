@@ -13,9 +13,9 @@
   src="{{ 'announcement-bar.js' | asset_url }}"
   data-sce-announcement=""
   data-sce-ab-hook="sce-ab-hook-{{ block.id }}"
-  data-placement="{{ block.settings.placement | default: 'sticky' | escape }}"
+  data-placement="sticky"
   data-section-id="{{ block.settings.section_id | escape }}"
-  data-api-url="{{ shop.secure_url }}/apps/sce/announcement-bar"
+  data-api-url="{{ block.settings.api_url | default: '/apps/sce/announcement-bar' | escape }}"
   data-z-index="{{ block.settings.z_index }}"
   defer
 ></script>
@@ -23,19 +23,22 @@
 {% schema %}
 {
   "name": "Announcement bar",
-  "target": "section", 
+  "target": "section",
+  "enabled_on": {
+    "templates": ["*"],
+    "groups": ["header", "footer"]
+  },
   "settings": [
     {
       "type": "paragraph",
-      "content": "ID-driven mode: paste a Section ID (sce-ab-...) to render that exact announcement. Nothing renders when empty."
+      "content": "Add this block only in the theme’s Header or Footer section group (Shopify restricts it there). Paste the Section HTML ID from the app (Copy Section ID). Uses the shop’s app proxy at /apps/sce/announcement-bar (same origin as your storefront)."
     },
     {
       "type": "text",
       "id": "section_id",
       "label": "Section ID",
-      "info": "Use the generated Section HTML ID from Announcement bars (Copy Section ID)."
-    },
-    
+      "info": "Must match Announcement bars in the app (case-insensitive). Examples: sce-ab-… or sce-announcement-…"
+    }
   ]
 }
 {% endschema %}

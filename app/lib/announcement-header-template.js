@@ -20,6 +20,16 @@ export function resolveSectionHtmlIdFromHeader(row) {
     String(template?.sectionHtmlId || "").trim(),
   );
   if (fromTemplate) return fromTemplate;
+  const renderCfg =
+    template?.render?.config && typeof template.render.config === "object"
+      ? template.render.config
+      : null;
+  if (renderCfg) {
+    const fromRender = normalizeAnnouncementSectionHtmlId(
+      String(renderCfg.sectionHtmlId || "").trim(),
+    );
+    if (fromRender) return fromRender;
+  }
   const cfg = parseConfig(row?.configJson || "{}");
   const fromConfig = normalizeAnnouncementSectionHtmlId(
     String(cfg.sectionHtmlId || "").trim(),

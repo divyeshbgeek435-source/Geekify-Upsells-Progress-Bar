@@ -4,13 +4,8 @@ generator client {
 
 datasource db {
   provider = "sqlite"
-  url      = "file:./dev.sqlite"
+  url      = env("DATABASE_URL")
 }
-
-
-
- 
- 
 
 model AnnouncementBody {
   id           String   @id @default(cuid())
@@ -22,7 +17,7 @@ model AnnouncementBody {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
   templateJson String   @default("{}")
-
+ 
   @@unique([shop, sectionId])
   @@index([shop, updatedAt])
   @@map("announcement_body")
@@ -46,8 +41,6 @@ model AnnouncementHeader {
   @@index([shop, active])
   @@map("announcement_headers")
 }
-
- 
 
 model PopupDesign {
   id            String   @id @default(cuid())
@@ -80,7 +73,6 @@ model Discount {
   @@unique([shop, kind, name])
   @@index([shop, kind, active])
 }
-
 
 model TierDiscount {
   id              String    @id
@@ -127,4 +119,61 @@ model TierWidgetSettings {
   widgetDynamicConfigJson String   @default("{}")
 }
 
- 
+model Session {
+  id                  String    @id
+  shop                String
+  state               String
+  isOnline            Boolean   @default(false)
+  scope               String?
+  expires             DateTime?
+  accessToken         String
+  userId              BigInt?
+  firstName           String?
+  lastName            String?
+  email               String?
+  accountOwner        Boolean   @default(false)
+  locale              String?
+  collaborator        Boolean?  @default(false)
+  emailVerified       Boolean?  @default(false)
+  refreshToken        String?
+  refreshTokenExpires DateTime?
+}
+
+model CartAccessLog {
+  id            String   @id @default(cuid())
+  shop          String
+  itemCount     Int?
+  subtotalCents Int?
+  currency      String?
+  pathname      String?
+  source        String?
+  createdAt     DateTime @default(now())
+
+  @@index([shop, createdAt])
+}
+
+model AnnouncementBar {
+  id         String   @id @default(cuid())
+  shop       String
+  name       String
+  barType    String
+  configJson String   @default("{}")
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([shop, updatedAt])
+  @@index([shop, active])
+}
+
+model PopupSignup {
+  id            String   @id @default(cuid())
+  shop          String
+  popupDesignId String
+  email         String
+  firstName     String   @default("")
+  createdAt     DateTime @default(now())
+
+  @@unique([shop, popupDesignId, email])
+  @@index([shop, popupDesignId])
+}

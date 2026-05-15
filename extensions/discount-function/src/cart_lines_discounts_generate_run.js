@@ -64,7 +64,7 @@ export function cartLinesDiscountsGenerateRun(input) {
     let orderCandidates = [];
     if (tierCandidates.length > 1) {
       // Shopify allows only one orderDiscountsAdd operation per run, and FIRST/MAXIMUM pick a
-      // single candidate — so combine qualified tiers into one fixed order discount.
+      // single candidate - so combine qualified tiers into one fixed order discount.
       orderCandidates = [mergeOrderTierCandidatesToSingleFixed(tierCandidates, subtotal)];
     } else if (tierCandidates.length === 1) {
       orderCandidates = tierCandidates;
@@ -268,7 +268,7 @@ function roundMoney(amount) {
 
 /**
  * Combine several tier order candidates into one fixed-amount discount so Shopify applies
- * the full benefit (see cartLinesDiscountsGenerateRun — single orderDiscountsAdd operation).
+ * the full benefit (see cartLinesDiscountsGenerateRun - single orderDiscountsAdd operation).
  */
 function mergeOrderTierCandidatesToSingleFixed(candidates, subtotal) {
   let totalOff = 0;

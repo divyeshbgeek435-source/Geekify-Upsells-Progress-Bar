@@ -41,7 +41,7 @@ const FIND_CUSTOMER_BY_EMAIL_QUERY = `#graphql
   }
 `;
 
-/** Shown in the storefront JSON — must stay shopper-safe (no Partner Dashboard / internal setup text). */
+/** Shown in the storefront JSON - must stay shopper-safe (no Partner Dashboard / internal setup text). */
 const PROTECTED_CUSTOMER_DATA_PUBLIC_MESSAGE =
   "We can't complete your signup right now. Please try again later or contact the storessssssssssss.";
 

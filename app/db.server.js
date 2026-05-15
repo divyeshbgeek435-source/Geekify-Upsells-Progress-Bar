@@ -1,4 +1,4 @@
-import { PrismaClient, Prisma } from "@prisma/client/index.js";
+import { PrismaClient, Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 
 const globalForPrisma = globalThis;
@@ -9,6 +9,7 @@ const REQUIRED_DELEGATES = [
   "announcementBody",
   "announcementHeader",
   "popupDesign",
+  "popupSignup",
   "discount",
 ];
 
@@ -20,6 +21,7 @@ function prismaSchemaCacheSignature() {
       announcementBody: Prisma.AnnouncementBodyScalarFieldEnum ?? null,
       announcementHeader: Prisma.AnnouncementHeaderScalarFieldEnum ?? null,
       popupDesign: Prisma.PopupDesignScalarFieldEnum ?? null,
+      popupSignup: Prisma.PopupSignupScalarFieldEnum ?? null,
       session: Prisma.SessionScalarFieldEnum ?? null,
       cartAccessLog: Prisma.CartAccessLogScalarFieldEnum ?? null,
       discount: Prisma.DiscountScalarFieldEnum ?? null,
@@ -39,7 +41,7 @@ const PRISMA_KEY = `__cartShopifyPrisma_${prismaSchemaCacheSignature()}`;
 /**
  * A complete client must include delegates for every model this app uses.
  * If `prisma generate` was never run after adding a model, `new PrismaClient()`
- * still constructs but omits new delegates — we must not cache that instance.
+ * still constructs but omits new delegates - we must not cache that instance.
  */
 function clientIsComplete(client) {
   return getMissingDelegates(client).length === 0;
@@ -65,8 +67,8 @@ const DEFAULT_WIDGET_SETTINGS = {
     "Unlock Tier 1 to apply your cart discount. Then unlock Tier 2 for free shipping.",
   sequentialMsg1: "Apply discount to unlock free shipping",
   sequentialMsg2: "Free shipping unlocked",
-  sequentialHintZero: "Progress: 0% — unlock Tier 1 to start.",
-  sequentialHintMid: "Progress: 50% — unlock Tier 2 for free shipping.",
+  sequentialHintZero: "Progress: 0% - unlock Tier 1 to start.",
+  sequentialHintMid: "Progress: 50% - unlock Tier 2 for free shipping.",
   tier1Icon: "%",
   tier2Icon: "🚚",
   subtotalLabel: "Current subtotal",
@@ -83,9 +85,9 @@ const DEFAULT_WIDGET_SETTINGS = {
   showTierMinimums: true,
   widgetDynamicConfigJson: "{}",
   selectorTargets:
-    ".product__info-container, .cart-drawer__content, .drawer__inner, form[action='/cart'], .cart__blocks",
+    ".product__info-container,.cart-drawer , .cart-drawer__content, .drawer__inner, form[action='/cart'], .cart__blocks",
   nameTargetSelectors:
-    ".cart-drawer__content, .drawer__inner, .drawer__header, form[action='/cart'], .cart__blocks",
+    ".cart-drawer__content, .cart-drawer ,.drawer__inner, .drawer__header, form[action='/cart'], .cart__blocks",
   sequentialTitle: "Rewards progress",
 };
 
@@ -468,7 +470,7 @@ function getPrisma() {
       const missing = getMissingDelegates(client);
       throw new Error(
         `Prisma Client is missing required delegates: ${missing.join(", ")}. ` +
-          "Run `npx prisma generate` in the project root and restart the dev server. " +
+          "Run `npm exec prisma generate` in the project root and restart the dev server. " +
           "If you already did that, Vite may have loaded Prisma’s browser stub: keep `ssr.external: [\"@prisma/client\"]` in vite.config.js (see project vite.config.js).",
       );
     }

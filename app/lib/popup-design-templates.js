@@ -36,8 +36,8 @@ export const POPUP_TEMPLATE_EDITOR_KEYS = [
 export const POPUP_READY_TEMPLATES = [
   // {
   //   id: "split_sale_memphis",
-  //   name: "Split — sale & coupon",
-  //   blurb: "Bold sans, soft split panels, dashed code — classic promo split.",
+  //   name: "Split - sale & coupon",
+  //   blurb: "Bold sans, soft split panels, dashed code - classic promo split.",
   //   editorKeys: POPUP_TEMPLATE_EDITOR_KEYS.filter(
   //     (k) => !["visual_style", "email_capture"].includes(k),
   //   ),
@@ -71,7 +71,7 @@ export const POPUP_READY_TEMPLATES = [
   // },
   // {
   //   id: "split_signup_countdown",
-  //   name: "Split — signup + timer",
+  //   name: "Split - signup + timer",
   //   blurb: "Image on the right, form feel with email fields and labeled countdown.",
   //   editorKeys: POPUP_TEMPLATE_EDITOR_KEYS.filter(
   //     (k) =>
@@ -117,7 +117,7 @@ export const POPUP_READY_TEMPLATES = [
   // },
   // {
   //   id: "stacked_teal_ticket",
-  //   name: "Stacked — hero + ticket code",
+  //   name: "Stacked - hero + ticket code",
   //   blurb: "Image on top, teal panel, body copy, ticket-style coupon.",
   //   editorKeys: POPUP_TEMPLATE_EDITOR_KEYS.filter(
   //     (k) => !["visual_style", "email_capture"].includes(k),
@@ -153,8 +153,8 @@ export const POPUP_READY_TEMPLATES = [
   // },
   // {
   //   id: "stacked_email_exit",
-  //   name: "Stacked — email capture",
-  //   blurb: "Hero image, centered copy, single email field — exit-offer style.",
+  //   name: "Stacked - email capture",
+  //   blurb: "Hero image, centered copy, single email field - exit-offer style.",
   //   editorKeys: POPUP_TEMPLATE_EDITOR_KEYS.filter(
   //     (k) =>
   //       ![
@@ -200,7 +200,7 @@ export const POPUP_READY_TEMPLATES = [
   // },
   {
     id: "stacked_subscribe_blue",
-    name: "Stacked — subscribe",
+    name: "Vertical Popup",
     blurb: "Image on top, white card, blue subscribe button.",
     editorKeys: POPUP_TEMPLATE_EDITOR_KEYS.filter(
       (k) =>
@@ -247,8 +247,8 @@ export const POPUP_READY_TEMPLATES = [
   },
   {
     id: "playful_split_promo",
-    name: "Split — playful promo",
-    blurb: "Mint panel, bright CTA — great for campaigns without a real spin wheel.",
+    name: "Horizontal Popup",
+    blurb: "Mint panel, bright CTA - great for campaigns without a real spin wheel.",
     editorKeys: POPUP_TEMPLATE_EDITOR_KEYS.filter((k) => !["visual_style"].includes(k)),
     config: {
       layoutMode: "split_image_left",
@@ -264,7 +264,7 @@ export const POPUP_READY_TEMPLATES = [
       buttonText: "#ffffff",
       overlayBg: "rgba(6, 78, 59, 0.25)",
       headline: "Spin into savings",
-      subheadline: "Win up to 20% off — add your email to unlock your offer.",
+      subheadline: "Win up to 20% off - add your email to unlock your offer.",
       titleBadgeText: "TREATS AWAIT",
       showTitle: true,
       couponCode: "LUCKY15",

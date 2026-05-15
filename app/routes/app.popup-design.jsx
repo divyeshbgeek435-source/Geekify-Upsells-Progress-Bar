@@ -1210,7 +1210,7 @@
 //               {[
 //                 ["DELAY", `${(showDelayMs / 1000).toFixed(1)}s`],
 //                 ["COUNTDOWN", countdownEndAt ? "Active" : "Off"],
-//                 ["COUPON", couponCode || "—"],
+//                 ["COUPON", couponCode || "-"],
 //               ].map(([label, val]) => (
 //                 <div key={label} style={{ textAlign: "center" }}>
 //                   <div style={{ fontSize: 9, letterSpacing: "0.1em", color: "var(--muted)", fontWeight: 600, marginBottom: 3 }}>{label}</div>
@@ -1361,7 +1361,7 @@
 // const PRESETS = [
 //   { key: "bloom", name: "Bloom", dot: "#e8a0b0", leftPanelBg: "#fde8ef", rightPanelBg: "#fff5f8", accentGold: "#d4607a", headlineColor: "#3a1520", subheadlineColor: "#b04060", buttonBg: "#d4607a", buttonText: "#fff5f8", overlayBg: "rgba(253,232,239,0.88)", visualStyle: "classic", modalBorderRadius: 12, titleBadgeText: "✦ LIMITED OFFER" },
 //   { key: "sage", name: "Sage", dot: "#7baa7b", leftPanelBg: "#eaf4ea", rightPanelBg: "#f6faf6", accentGold: "#4a8c5c", headlineColor: "#1a3020", subheadlineColor: "#3a7050", buttonBg: "#4a8c5c", buttonText: "#f6faf6", overlayBg: "rgba(234,244,234,0.88)", visualStyle: "classic", modalBorderRadius: 12, titleBadgeText: "✦ LIMITED OFFER" },
-//   { key: "sand", name: "Sand", dot: "#c9a96e", leftPanelBg: "#faf3e8", rightPanelBg: "#fffbf4", accentGold: "#b8860b", headlineColor: "#2c1e08", subheadlineColor: "#9a6e20", buttonBg: "#2c1e08", buttonText: "#fffbf4", overlayBg: "rgba(250,243,232,0.9)", visualStyle: "editorial", modalBorderRadius: 16, titleBadgeText: "NEW — JUST IN" },
+//   { key: "sand", name: "Sand", dot: "#c9a96e", leftPanelBg: "#faf3e8", rightPanelBg: "#fffbf4", accentGold: "#b8860b", headlineColor: "#2c1e08", subheadlineColor: "#9a6e20", buttonBg: "#2c1e08", buttonText: "#fffbf4", overlayBg: "rgba(250,243,232,0.9)", visualStyle: "editorial", modalBorderRadius: 16, titleBadgeText: "NEW - JUST IN" },
 //   { key: "sky", name: "Sky", dot: "#6aaee8", leftPanelBg: "#e8f3fd", rightPanelBg: "#f4f9ff", accentGold: "#2e7ec8", headlineColor: "#0c2240", subheadlineColor: "#2860a8", buttonBg: "#2e7ec8", buttonText: "#f4f9ff", overlayBg: "rgba(232,243,253,0.9)", visualStyle: "classic", modalBorderRadius: 12, titleBadgeText: "✦ LIMITED OFFER" },
 //   { key: "slate", name: "Slate", dot: "#8898aa", leftPanelBg: "#eef0f4", rightPanelBg: "#f8f9fb", accentGold: "#445566", headlineColor: "#1a222c", subheadlineColor: "#445566", buttonBg: "#1a222c", buttonText: "#f8f9fb", overlayBg: "rgba(238,240,244,0.9)", visualStyle: "minimal", modalBorderRadius: 20, titleBadgeText: "SAVE TODAY" },
 //   { key: "frost", name: "Frost", dot: "#93c5fd", leftPanelBg: "#bfdbfe", rightPanelBg: "#eff6ff", accentGold: "#2563eb", headlineColor: "#0f172a", subheadlineColor: "#475569", buttonBg: "#1d4ed8", buttonText: "#f8fafc", overlayBg: "rgba(15,23,42,0.35)", visualStyle: "glass", modalBorderRadius: 24, titleBadgeText: "WELCOME OFFER" },
@@ -1370,17 +1370,17 @@
 // ];
 
 // const LAYOUT_LABELS = {
-//   split_image_left: "Split — image left",
-//   split_image_right: "Split — image right",
-//   stacked: "Stacked — image on top",
+//   split_image_left: "Split - image left",
+//   split_image_right: "Split - image right",
+//   stacked: "Stacked - image on top",
 //   content_only: "Content only",
 // };
 
 // const VISUAL_STYLE_LABELS = {
-//   classic: "Classic — serif headline, balanced",
-//   glass: "Glass — frosted content panel (on-trend)",
-//   minimal: "Minimal — bold sans, pill button",
-//   editorial: "Editorial — large type, softer label",
+//   classic: "Classic - serif headline, balanced",
+//   glass: "Glass - frosted content panel (on-trend)",
+//   minimal: "Minimal - bold sans, pill button",
+//   editorial: "Editorial - large type, softer label",
 // };
 
 // const CLOSE_BUTTON_LABELS = {
@@ -1444,7 +1444,7 @@
 //       bullets.push("Opens when the URL path includes a product segment (standard Shopify), for example:");
 //       bullets.push("• /products/gift-card");
 //       bullets.push("• /en/products/gift-card (Markets)");
-//       bullets.push("Your Gift Card URL matches this rule — if you still see nothing, the script is probably not loaded on product templates (see yellow box below).");
+//       bullets.push("Your Gift Card URL matches this rule - if you still see nothing, the script is probably not loaded on product templates (see yellow box below).");
 //       break;
 //     case "collection":
 //       needsSiteWideEmbed = true;
@@ -1459,7 +1459,7 @@
 //       bullets.push(
 //         c
 //           ? `Opens only when the path contains “${c}” (case-insensitive), e.g. any URL with ${c} in it.`
-//           : "Set “URL must contain” above — otherwise this mode will not open the popup.",
+//           : "Set “URL must contain” above - otherwise this mode will not open the popup.",
 //       );
 //       break;
 //     default:
@@ -2404,7 +2404,7 @@
 //           popupDesignId: generatePopupDesignId(),
 //         }),
 //       );
-//       const shortName = (t.name.split("—")[0] || "Popup").trim();
+//       const shortName = (t.name.split("-")[0] || "Popup").trim();
 //       applyEditorRef.current(hydrateFromConfig(merged), `${shortName} popup`);
 //       return;
 //     }
@@ -2613,12 +2613,12 @@
 //                                 <span style={{ fontFamily: "ui-monospace, monospace", fontSize: "12px", wordBreak: "break-word" }}>{p.config.popupDesignId}</span>
 //                               </s-text>
 //                             </s-table-cell>
-//                             <s-table-cell>{meta?.name || "—"}</s-table-cell>
+//                             <s-table-cell>{meta?.name || "-"}</s-table-cell>
 //                             <s-table-cell>
 //                               <s-text type="strong">{p.name}</s-text>
 //                             </s-table-cell>
 //                             <s-table-cell>
-//                               <s-text tone="subdued">{summary || "—"}</s-text>
+//                               <s-text tone="subdued">{summary || "-"}</s-text>
 //                             </s-table-cell>
 //                             {/* <s-table-cell>
 //                               <s-text tone="subdued">{new Date(p.savedAt).toLocaleString()}</s-text>
@@ -2818,7 +2818,7 @@
 //               <>
 //                 <SectionDivider title="Ready-made layouts" />
 //                 <s-paragraph color="subdued">
-//                   One click loads copy, layout, colors, and options to match common promos. Your Design ID stays the same—save when you are happy. Set a countdown end time under Timing if the template uses a timer.
+//                   One click loads copy, layout, colors, and options to match common promos. Your Design ID stays the same-save when you are happy. Set a countdown end time under Timing if the template uses a timer.
 //                 </s-paragraph>
 //                 <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 18 }}>
 //                   {POPUP_READY_TEMPLATES.map((t) => (
@@ -2904,7 +2904,7 @@
 //             <SectionDivider title="This popup" />
 //             <Field label="Internal name (app list only)" value={popupName} onChange={(e) => setPopupName(e.currentTarget.value)} placeholder="Spring sale modal" />
 //             <s-paragraph color="subdued">
-//               Not shown on the storefront. Paste the Design ID into the theme <strong>Popup design</strong> block or the <strong>Popup design (site-wide)</strong> app embed. Use the app embed (Theme → App embeds) when you target product, collection, or cart pages so the script loads on every template—not only where a section block was added.
+//               Not shown on the storefront. Paste the Design ID into the theme <strong>Popup design</strong> block or the <strong>Popup design (site-wide)</strong> app embed. Use the app embed (Theme → App embeds) when you target product, collection, or cart pages so the script loads on every template-not only where a section block was added.
 //             </s-paragraph>
 //             </>
 //             ) : null}
@@ -3219,7 +3219,7 @@
 
 //             {maxImpressions > 0 ? (
 //               <s-banner tone="caution" heading="Impression limit active">
-//                 Max times to show is set to <strong>{maxImpressions}</strong>. Each full display counts for that browser. If you tested on the homepage already, the limit may be reached—try a private window, raise the limit, or clear site data for your store.
+//                 Max times to show is set to <strong>{maxImpressions}</strong>. Each full display counts for that browser. If you tested on the homepage already, the limit may be reached-try a private window, raise the limit, or clear site data for your store.
 //               </s-banner>
 //             ) : null}
 
@@ -3278,7 +3278,7 @@
 //               <s-banner tone="warning" heading="Product / collection / cart / custom URLs">
 //                 The section-only block often exists only on the homepage, so <strong>this script never runs on product pages</strong> unless you add it there. Turn on the app embed:{" "}
 //                 <strong>Online store → Themes → Customize → App embeds → “Popup design (site-wide)”</strong>, paste Design ID{" "}
-//                 <code style={{ background: "var(--p-color-bg-surface-secondary, #fff)", padding: "1px 6px", borderRadius: 4 }}>{popupDesignId || "—"}</code>, save, then open a product URL again.
+//                 <code style={{ background: "var(--p-color-bg-surface-secondary, #fff)", padding: "1px 6px", borderRadius: 4 }}>{popupDesignId || "-"}</code>, save, then open a product URL again.
 //               </s-banner>
 //             ) : null}
 
@@ -3291,7 +3291,7 @@
 //                 ))}
 //               </ul>
 //               <s-paragraph color="subdued">
-//                 The app only checks the browser address (path). It does not replace theme placement—you still need the embed or section on templates where you want the script to load.
+//                 The app only checks the browser address (path). It does not replace theme placement-you still need the embed or section on templates where you want the script to load.
 //               </s-paragraph>
 //             </s-banner>
 //             </>
@@ -3588,8 +3588,8 @@
 //               {[
 //                 { label: "Show delay", value: `${(showDelayMs / 1000).toFixed(1)}s`, color: "#2e7ec8" },
 //                 { label: "Countdown", value: countdownEndAt ? "Active" : "Off", color: countdownEndAt ? "#2d8a4e" : "#aab4c8" },
-//                 { label: "Coupon", value: couponCode || "—", color: couponCode ? "#b8860b" : "#aab4c8" },
-//                 { label: "Layout", value: (LAYOUT_LABELS[layoutMode] || layoutMode).split(" —")[0], color: "#445566" },
+//                 { label: "Coupon", value: couponCode || "-", color: couponCode ? "#b8860b" : "#aab4c8" },
+//                 { label: "Layout", value: (LAYOUT_LABELS[layoutMode] || layoutMode).split(" -")[0], color: "#445566" },
 //                 { label: "Style", value: visualStyle, color: "#6366f1" },
 //               ].map(({ label, value, color }) => (
 //                 <s-box key={label} padding="base" borderRadius="base" borderWidth="base" background="base">
@@ -3754,7 +3754,7 @@ const FONT_IMPORT = `@import url('https://fonts.googleapis.com/css2?family=Cormo
 const PRESETS = [
   { key: "bloom", name: "Bloom", dot: "#e8a0b0", leftPanelBg: "#fde8ef", rightPanelBg: "#fff5f8", accentGold: "#d4607a", headlineColor: "#3a1520", subheadlineColor: "#b04060", buttonBg: "#d4607a", buttonText: "#fff5f8", overlayBg: "rgba(253,232,239,0.88)", visualStyle: "classic", modalBorderRadius: 12, titleBadgeText: "✦ LIMITED OFFER" },
   { key: "sage", name: "Sage", dot: "#7baa7b", leftPanelBg: "#eaf4ea", rightPanelBg: "#f6faf6", accentGold: "#4a8c5c", headlineColor: "#1a3020", subheadlineColor: "#3a7050", buttonBg: "#4a8c5c", buttonText: "#f6faf6", overlayBg: "rgba(234,244,234,0.88)", visualStyle: "classic", modalBorderRadius: 12, titleBadgeText: "✦ LIMITED OFFER" },
-  { key: "sand", name: "Sand", dot: "#c9a96e", leftPanelBg: "#faf3e8", rightPanelBg: "#fffbf4", accentGold: "#b8860b", headlineColor: "#2c1e08", subheadlineColor: "#9a6e20", buttonBg: "#2c1e08", buttonText: "#fffbf4", overlayBg: "rgba(250,243,232,0.9)", visualStyle: "editorial", modalBorderRadius: 16, titleBadgeText: "NEW — JUST IN" },
+  { key: "sand", name: "Sand", dot: "#c9a96e", leftPanelBg: "#faf3e8", rightPanelBg: "#fffbf4", accentGold: "#b8860b", headlineColor: "#2c1e08", subheadlineColor: "#9a6e20", buttonBg: "#2c1e08", buttonText: "#fffbf4", overlayBg: "rgba(250,243,232,0.9)", visualStyle: "editorial", modalBorderRadius: 16, titleBadgeText: "NEW - JUST IN" },
   { key: "sky", name: "Sky", dot: "#6aaee8", leftPanelBg: "#e8f3fd", rightPanelBg: "#f4f9ff", accentGold: "#2e7ec8", headlineColor: "#0c2240", subheadlineColor: "#2860a8", buttonBg: "#2e7ec8", buttonText: "#f4f9ff", overlayBg: "rgba(232,243,253,0.9)", visualStyle: "classic", modalBorderRadius: 12, titleBadgeText: "✦ LIMITED OFFER" },
   { key: "slate", name: "Slate", dot: "#8898aa", leftPanelBg: "#eef0f4", rightPanelBg: "#f8f9fb", accentGold: "#445566", headlineColor: "#1a222c", subheadlineColor: "#445566", buttonBg: "#1a222c", buttonText: "#f8f9fb", overlayBg: "rgba(238,240,244,0.9)", visualStyle: "minimal", modalBorderRadius: 20, titleBadgeText: "SAVE TODAY" },
   { key: "frost", name: "Frost", dot: "#93c5fd", leftPanelBg: "#bfdbfe", rightPanelBg: "#eff6ff", accentGold: "#2563eb", headlineColor: "#0f172a", subheadlineColor: "#475569", buttonBg: "#1d4ed8", buttonText: "#f8fafc", overlayBg: "rgba(15,23,42,0.35)", visualStyle: "glass", modalBorderRadius: 24, titleBadgeText: "WELCOME OFFER" },
@@ -3763,17 +3763,17 @@ const PRESETS = [
 ];
 
 const LAYOUT_LABELS = {
-  split_image_left: "Split — image left",
-  split_image_right: "Split — image right",
-  stacked: "Stacked — image on top",
+  split_image_left: "Split - image left",
+  split_image_right: "Split - image right",
+  stacked: "Stacked - image on top",
   content_only: "Content only",
 };
 
 const VISUAL_STYLE_LABELS = {
-  classic: "Classic — serif headline, balanced",
-  glass: "Glass — frosted content panel (on-trend)",
-  minimal: "Minimal — bold sans, pill button",
-  editorial: "Editorial — large type, softer label",
+  classic: "Classic - serif headline, balanced",
+  glass: "Glass - frosted content panel (on-trend)",
+  minimal: "Minimal - bold sans, pill button",
+  editorial: "Editorial - large type, softer label",
 };
 
 const CLOSE_BUTTON_LABELS = {
@@ -3795,6 +3795,18 @@ const EDITOR_TABS = [
   { id: "targeting", label: "Targeting", icon: "location" },
   { id: "colors",    label: "Colors",    icon: "color" },
 ];
+
+/** Global cap: max popups per shop (mirrored in UI via `popups.length`). */
+const MAX_POPUPS_PER_SHOP = 5;
+const POPUP_LIMIT_REACHED_MESSAGE = "You can only create up to 5 popups.";
+
+async function rejectIfShopPopupLimitReached(shop) {
+  const count = await prisma.popupDesign.count({ where: { shop } });
+  if (count >= MAX_POPUPS_PER_SHOP) {
+    return { ok: false, error: POPUP_LIMIT_REACHED_MESSAGE };
+  }
+  return null;
+}
 
 function getStorefrontTargetingExplainer(pageTarget, customPathContains) {
   const c = String(customPathContains || "").trim();
@@ -3827,7 +3839,7 @@ function getStorefrontTargetingExplainer(pageTarget, customPathContains) {
       bullets.push(
         c
           ? `Opens only when the path contains "${c}" (case-insensitive).`
-          : "Set \"URL must contain\" below — otherwise this mode will not open the popup."
+          : "Set \"URL must contain\" below - otherwise this mode will not open the popup."
       );      break;
     default:
       bullets.push("Opens according to the selected page targeting.");
@@ -3933,6 +3945,8 @@ export const action = async ({ request }) => {
   const intent = String(form.get("intent") || "");
 
   if (intent === "create") {
+    const limitErr = await rejectIfShopPopupLimitReached(shop);
+    if (limitErr) return limitErr;
     const name = String(form.get("popupName") || "Untitled popup").trim() || "Untitled popup";
     const cfg = defaultPopupDesignConfig();
     cfg.popupDesignId = String(cfg.popupDesignId || "").trim() || generatePopupDesignId();
@@ -3946,6 +3960,8 @@ export const action = async ({ request }) => {
   }
 
   if (intent === "create_with_config") {
+    const limitErr = await rejectIfShopPopupLimitReached(shop);
+    if (limitErr) return limitErr;
     const name = String(form.get("popupName") || "Untitled popup").trim() || "Untitled popup";
     const rawJson = String(form.get("configJson") || "{}");
     let cfg;
@@ -3969,6 +3985,8 @@ export const action = async ({ request }) => {
   }
 
   if (intent === "duplicate") {
+    const limitErr = await rejectIfShopPopupLimitReached(shop);
+    if (limitErr) return limitErr;
     const rowId = String(form.get("rowId") || "").trim();
     const src = await prisma.popupDesign.findFirst({ where: { id: rowId, shop } });
     if (!src) return { ok: false, error: "Popup not found." };
@@ -4272,6 +4290,7 @@ export default function PopupDesignPage() {
   const [tablePage, setTablePage] = useState(1);
 
   const totalPopupRecords = popups.length;
+  const atPopupLimit = totalPopupRecords >= MAX_POPUPS_PER_SHOP;
   const totalTablePages = Math.max(1, Math.ceil(totalPopupRecords / tablePageSize));
   const currentTablePage = Math.min(tablePage, totalTablePages);
   const tableStart = (currentTablePage - 1) * tablePageSize;
@@ -4292,6 +4311,15 @@ export default function PopupDesignPage() {
   }, [tablePage, totalTablePages]);
 
   const hydrateVersion = useRef("");
+
+  useEffect(() => {
+    if (!atPopupLimit) return;
+    setTemplateModalOpen(false);
+    if (configModal?.mode === "create") {
+      hydrateVersion.current = "";
+      setConfigModal(null);
+    }
+  }, [atPopupLimit, configModal?.mode]);
   const applyEditorRef = useRef((_h, _n) => {});
   applyEditorRef.current = (h, name) => {
     setPopupName(name); setDesignTemplateId(h.designTemplateId || ""); setPopupDesignId(h.popupDesignId);
@@ -4327,7 +4355,7 @@ export default function PopupDesignPage() {
       if (hydrateVersion.current === v) return;
       hydrateVersion.current = v;
       const merged = parsePopupDesignConfig(JSON.stringify({ ...defaultPopupDesignConfig(), ...t.config, designTemplateId: t.id, popupDesignId: generatePopupDesignId() }));
-      const shortName = (t.name.split("—")[0] || "Popup").trim();
+      const shortName = (t.name.split("-")[0] || "Popup").trim();
       applyEditorRef.current(hydrateFromConfig(merged), `${shortName} popup`);
       setEditorTab("design");
       return;
@@ -4569,7 +4597,7 @@ export default function PopupDesignPage() {
 
         {showEditorKey("popup_name") && (
           <TabSection title="Internal Name">
-            <Field label="Name (app list only — not shown on storefront)" value={popupName} onChange={(e) => setPopupName(e.currentTarget.value)} placeholder="Spring sale modal" />
+            <Field label="Name (app list only - not shown on storefront)" value={popupName} onChange={(e) => setPopupName(e.currentTarget.value)} placeholder="Spring sale modal" />
           </TabSection>
         )}
 
@@ -4682,11 +4710,18 @@ export default function PopupDesignPage() {
         <TabSection title="Show Delay">
           <div style={{ background: "#f8fafc", borderRadius: 10, padding: "14px 16px", border: "1px solid #eef0f4" }}>
             <input type="range" min={0} max={10000} step={100} value={showDelayMs} onChange={(e) => setShowDelayMs(Number(e.target.value))} style={{ width: "100%" }} />
-            <s-stack direction="inline" distribution="space-between" paddingBlockStart="small-100">
-              <s-text tone="subdued">Instant</s-text>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                width: "100%",
+                paddingBlockStart: "var(--p-space-100, 4px)",
+              }}
+            >
               <s-text type="strong">{showDelayMs} ms</s-text>
-              <s-text tone="subdued">10 000 ms</s-text>
-            </s-stack>
+              <s-text tone="subdued">10000 ms</s-text>
+            </div>
           </div>
         </TabSection>
 
@@ -4696,7 +4731,7 @@ export default function PopupDesignPage() {
             <>
               <Field label="Countdown ends at" type="datetime-local" value={countdownLocal} onChange={(e) => syncCountdown(e.currentTarget.value)} />
               <s-select label="Timer display style" value={countdownStyle} onChange={(e) => setCountdownStyle(parsePopupCountdownStyle(e.target?.value ?? countdownStyle))}>
-                <s-option value="compact">Compact — DD:HH:MM:SS</s-option>
+                <s-option value="compact">Compact - DD:HH:MM:SS</s-option>
                 <s-option value="labeled">Labeled boxes</s-option>
               </s-select>
             </>
@@ -4833,7 +4868,7 @@ export default function PopupDesignPage() {
         @keyframes sceDelPanelIn{from{opacity:0;transform:scale(0.96) translateY(12px)}to{opacity:1;transform:scale(1) translateY(0)}}
       `}</style>
 
-      <s-page heading="Popup Design" inlineSize="large">
+      <s-page heading="Popup" inlineSize="large">
         {/* Save status in secondary slot */}
         <s-stack slot="secondary-actions" direction="inline" gap="small-100" alignItems="center">
           {actionData?.ok && actionData?.intent === "save" ? (
@@ -4895,34 +4930,41 @@ export default function PopupDesignPage() {
                           }}
                         >
                           <s-option value="5">5 / page</s-option>
-                          <s-option value="10">10 / page</s-option>
-                          <s-option value="25">25 / page</s-option>
-                          <s-option value="50">50 / page</s-option>
+                          <s-option value="10">10 / page</s-option> 
+                          {/* <s-option value="25">25 / page</s-option>
+                          <s-option value="50">50 / page</s-option> */}
                         </s-select>
                       </div>
                       {/* <s-text tone="subdued">
                         Total records: <strong>{totalPopupRecords}</strong>
                       </s-text> */}
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => setTemplateModalOpen(true)}
-                      style={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: 8,
-                        padding: "8px 14px",
-                        background: "rgb(0 123 96 / 10%)",
-                        color: "rgb(0 123 96)",
-                        border: "1px solid rgb(0 123 96 / 20%)",
-                        borderRadius: 8,
-                        fontWeight: 700,
-                        cursor: "pointer",
-                      }}
-                    >
-                      <span aria-hidden="true" style={{ fontWeight: 900 }}>+</span>
-                      Create popup
-                    </button>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8 }}>
+                      {atPopupLimit ? (
+                        <s-text tone="subdued">{POPUP_LIMIT_REACHED_MESSAGE}</s-text>
+                      ) : null}
+                      <button
+                        type="button"
+                        disabled={atPopupLimit}
+                        aria-disabled={atPopupLimit}
+                        onClick={() => { if (!atPopupLimit) setTemplateModalOpen(true); }}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 8,
+                          padding: "8px 14px",
+                          background: atPopupLimit ? "rgb(0 123 96 / 5%)" : "rgb(0 123 96 / 10%)",
+                          color: atPopupLimit ? "rgb(0 123 96 / 50%)" : "rgb(0 123 96)",
+                          border: "1px solid rgb(0 123 96 / 20%)",
+                          borderRadius: 8,
+                          fontWeight: 700,
+                          cursor: atPopupLimit ? "not-allowed" : "pointer",
+                        }}
+                      >
+                        <span aria-hidden="true" style={{ fontWeight: 900 }}>+</span>
+                        Create popup
+                      </button>
+                    </div>
                   </div>
                   <div style={{ overflowX: "auto", borderRadius: 14, border: "1px solid #e4e8f0", background: "#fff" }}>
                   <table className="popup-design-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
@@ -4954,7 +4996,7 @@ export default function PopupDesignPage() {
                               {meta?.name ? (
                                 <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.08em", padding: "2px 8px",   }}>{meta.name}</span>
                               ) : (
-                                <span style={{ fontSize: 12, color: "#94a3b8" }}>—</span>
+                                <span style={{ fontSize: 12, color: "#94a3b8" }}>-</span>
                               )}
                             </td>
                             <td style={{ ...cellPad, color: "#64748b", fontSize: 12, lineHeight: 1.5, maxWidth: 360 }}>
@@ -5052,9 +5094,14 @@ export default function PopupDesignPage() {
               onClick={(e) => e.stopPropagation()}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24 }}>
                 <div>
-                  <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", color: "#aab4c8", textTransform: "uppercase", marginBottom: 6 }}>New Popup</div>
+                  {/* <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.1em", color: "#aab4c8", textTransform: "uppercase", marginBottom: 6 }}>New Popup</div> */}
                   <div style={{ fontSize: 22, fontWeight: 700, color: "#0f172a" }}>Choose a design template</div>
-                  <div style={{ fontSize: 13, color: "#8896a8", marginTop: 4 }}>Start from a ready-made layout — you can customise everything after.</div>
+                  <div style={{ fontSize: 13, color: "#8896a8", marginTop: 4 }}>Start from a ready - made layout - you can customise everything after.</div>
+                  {atPopupLimit ? (
+                    <div style={{ marginTop: 12 }}>
+                      <s-banner tone="warning">{POPUP_LIMIT_REACHED_MESSAGE}</s-banner>
+                    </div>
+                  ) : null}
                 </div>
                 <button
                   type="button"
@@ -5089,9 +5136,10 @@ export default function PopupDesignPage() {
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", gap: 12 }}>
                 {POPUP_READY_TEMPLATES.map((t) => (
                   <button key={t.id} type="button"
-                    onClick={() => { setTemplateModalOpen(false); setConfigModal({ mode: "create", templateId: t.id }); }}
-                    style={{ textAlign: "left", padding: "18px 16px", borderRadius: 14, border: "1.5px solid #e4e8f0", background: "#fafbfd", cursor: "pointer", transition: "all 0.15s" }}
-                    onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#005bd3"; e.currentTarget.style.background = "#f0f6ff"; e.currentTarget.style.transform = "translateY(-1px)"; }}
+                    disabled={atPopupLimit}
+                    onClick={() => { if (atPopupLimit) return; setTemplateModalOpen(false); setConfigModal({ mode: "create", templateId: t.id }); }}
+                    style={{ textAlign: "left", padding: "18px 16px", borderRadius: 14, border: "1.5px solid #e4e8f0", background: "#fafbfd", cursor: atPopupLimit ? "not-allowed" : "pointer", transition: "all 0.15s", opacity: atPopupLimit ? 0.55 : 1 }}
+                    onMouseEnter={(e) => { e.currentTarget.style.borderColor = "rgba(0, 123, 96)"; e.currentTarget.style.background = "rgba(0, 123, 96, 0.1)"; e.currentTarget.style.transform = "translateY(-1px)"; }}
                     onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#e4e8f0"; e.currentTarget.style.background = "#fafbfd"; e.currentTarget.style.transform = "translateY(0)"; }}
                   >
                     <div style={{ fontWeight: 700, fontSize: 13, color: "#0f172a", marginBottom: 6 }}>{t.name}</div>
@@ -5129,10 +5177,10 @@ export default function PopupDesignPage() {
                   <s-badge tone="success" icon="check-circle">Saved</s-badge>
                 )}
                 {configModal.mode === "create" ? (
-                  <s-button type="button" variant="primary" icon="plus"
-                    disabled={fetcher.state !== "idle"} loading={fetcher.state !== "idle"}
-                    onClick={() => { const fd = new FormData(); fd.set("intent", "create_with_config"); fd.set("popupName", popupName); fd.set("configJson", JSON.stringify(serializeEditorToParsedConfig())); fetcher.submit(fd, { method: "post" }); }}>
-                    Create popup
+                  <s-button type="button" variant="primary"  
+                    disabled={fetcher.state !== "idle" || atPopupLimit} loading={fetcher.state !== "idle"}
+                    onClick={() => { if (atPopupLimit) return; const fd = new FormData(); fd.set("intent", "create_with_config"); fd.set("popupName", popupName); fd.set("configJson", JSON.stringify(serializeEditorToParsedConfig())); fetcher.submit(fd, { method: "post" }); }}>
+                   Save
                   </s-button>
                 ) : (
                   <Form method="post" style={{ display: "contents" }}>
@@ -5269,7 +5317,7 @@ export default function PopupDesignPage() {
                   {[
                     { label: "Delay", value: `${(showDelayMs / 1000).toFixed(1)}s`, color: "#2e7ec8" },
                     { label: "Countdown", value: countdownEndAt ? "Active" : "Off", color: countdownEndAt ? "#2d8a4e" : "#aab4c8" },
-                    { label: "Layout", value: (LAYOUT_LABELS[layoutMode] || layoutMode).split(" —")[0], color: "#445566" },
+                    { label: "Layout", value: (LAYOUT_LABELS[layoutMode] || layoutMode).split(" -")[0], color: "#445566" },
                   ].map(({ label, value, color }) => (
                     <div key={label} style={{ background: "#fff", borderRadius: 10, border: "1px solid #e4e8f0", padding: "10px 12px", textAlign: "center" }}>
                       <div style={{ fontSize: 13, fontWeight: 700, color, marginBottom: 2 }}>{value}</div>

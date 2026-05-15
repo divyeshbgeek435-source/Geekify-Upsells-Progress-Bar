@@ -85,7 +85,7 @@ function baseConfigShape() {
   };
 }
 
-/** New shop / no saved row yet — includes a fresh section id. */
+/** New shop / no saved row yet - includes a fresh section id. */
 export function defaultAdditionalConfig() {
   return {
     ...baseConfigShape(),

@@ -2,7 +2,7 @@
 
 export function defaultConfig() {
   return {
-    messages: ["Summer sale — 20% off everything", "Free shipping over $50"],
+    messages: ["Summer sale - 20% off everything", "Free shipping over $50"],
     backgroundColor: "#0f172a",
     textColor: "#f8fafc",
     borderColor: "#334155",
@@ -19,6 +19,9 @@ export function defaultConfig() {
     lineHeight: 1.35,
     maxContentWidthPx: 0,
     marqueeSpeedSeconds: 22,
+    marqueeSeparatorIcon: "•",
+    marqueeSeparatorGapPx: 16,
+    marqueePauseOnHover: false,
     rotateIntervalMs: 4500,
     linkUrl: "",
     linkUnderline: true,
@@ -53,6 +56,9 @@ export function parseConfig(json) {
   merged.paddingXpx = Math.max(0, Number(merged.paddingXpx) || 0);
   merged.borderRadiusPx = Math.max(0, Number(merged.borderRadiusPx) || 0);
   merged.marqueeSpeedSeconds = Math.max(4, Number(merged.marqueeSpeedSeconds) || 22);
+  merged.marqueeSeparatorIcon = String(merged.marqueeSeparatorIcon ?? "•").trim() || "•";
+  merged.marqueeSeparatorGapPx = Math.max(0, Number(merged.marqueeSeparatorGapPx) || 16);
+  merged.marqueePauseOnHover = merged.marqueePauseOnHover === true;
   merged.rotateIntervalMs = Math.max(1500, Number(merged.rotateIntervalMs) || 4500);
   merged.lineHeight =
     typeof merged.lineHeight === "number" && merged.lineHeight > 0

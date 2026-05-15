@@ -17,7 +17,7 @@
 
 // function defaultConfig() {
 //   return {
-//     messages: ["Summer sale — 20% off everything", "Free shipping over $50"],
+//     messages: ["Summer sale - 20% off everything", "Free shipping over $50"],
 //     backgroundColor: "#0f172a",
 //     textColor: "#f8fafc",
 //     borderColor: "#334155",
@@ -276,7 +276,7 @@
 //       >
 //         <div style={{ padding: 16, fontSize: 13, color: "#6b7280", lineHeight: 1.6 }}>
 //           <strong style={{ color: "#374151" }}>Scroll inside this box</strong> (click here if needed,
-//           then use trackpad or wheel). The bar stays fixed at the top of the preview — only this
+//           then use trackpad or wheel). The bar stays fixed at the top of the preview - only this
 //           area scrolls, like page content under your real announcement bar.
 //         </div>
 //         <div style={{ padding: "0 16px 16px", fontSize: 13, color: "#9ca3af" }}>
@@ -847,7 +847,7 @@
 //                   <s-badge tone="success">Sticky column</s-badge>
 //                 </s-stack>
 //                 <s-text tone="neutral">
-//                   {typeLabel} — this preview column stays on screen while you scroll the main page
+//                   {typeLabel} - this preview column stays on screen while you scroll the main page
 //                   (sticky). Inside the frame, the bar stays fixed and only the sample page scrolls.
 //                 </s-text>
 //                 <s-box padding="none" borderWidth="base" borderRadius="base" background="base">
@@ -1059,7 +1059,7 @@
 
 // function defaultConfig() {
 //   return {
-//     messages: ["Summer sale — 20% off everything", "Free shipping over $50"],
+//     messages: ["Summer sale - 20% off everything", "Free shipping over $50"],
 //     backgroundColor: "#0f172a",
 //     textColor: "#f8fafc",
 //     borderColor: "#334155",
@@ -1226,7 +1226,7 @@
 //           onMouseLeave={(e) => { e.currentTarget.style.transform = "scale(1)"; }}
 //         />
 
-//         {/* Hidden native colour picker — triggered by swatch click */}
+//         {/* Hidden native colour picker - triggered by swatch click */}
 //         <input
 //           ref={inputRef}
 //           type="color"
@@ -2308,7 +2308,7 @@
 //                   <s-badge tone="success">Sticky column</s-badge>
 //                 </s-stack>
 //                 <s-text tone="neutral">
-//                   {typeLabel} — this preview column stays on screen while you scroll the main page
+//                   {typeLabel} - this preview column stays on screen while you scroll the main page
 //                   (sticky). Inside the frame, the bar stays fixed and only the sample page scrolls.
 //                 </s-text>
 //                 <s-box padding="none" borderWidth="base" borderRadius="base" background="base">
@@ -2478,7 +2478,6 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
-  Form,
   useActionData,
   useLoaderData,
   useLocation,
@@ -2488,8 +2487,6 @@ import {
 } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
-import prisma from "../db.server";
-import { getShopifyAppClientId } from "../lib/shopify-config.server";
 import { renderAnnouncementLiquid } from "../utils/announcementLiquid";
 import { defaultConfig, parseConfig } from "../lib/announcement-bar-config.js";
 import {
@@ -2497,12 +2494,13 @@ import {
   normalizeAnnouncementSectionHtmlId,
 } from "../lib/announcement-section-html-id.js";
 import {
-  buildAnnouncementTemplate,
   resolveSectionHtmlIdFromHeader,
 } from "../lib/announcement-header-template.js";
+import {
+  loadAnnouncementHeaderAdminContext,
+  handleAnnouncementHeaderAdminAction,
+} from "../lib/announcements-admin.server.js";
 
-const ANNOUNCE_EMBED_HANDLE = "announcement-bar-embed";
-const ANNOUNCE_BLOCK_HANDLE = "announcement-bar-block";
 const useIsomorphicLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
 const ANNOUNCEMENT_STYLE_PRESETS = [
   {
@@ -2597,6 +2595,19 @@ function fontStackCss(family) {
   if (family === "serif") return 'Georgia, "Times New Roman", serif';
   if (family === "mono") return "ui-monospace, SFMono-Regular, Menlo, Monaco, monospace";
   return family;
+}
+
+function readInputText(e, fallback = "") {
+  const raw = e?.target?.value ?? e?.currentTarget?.value ?? e?.detail?.value ?? fallback;
+  return String(raw ?? "").replace(/[\u0000-\u001F\u007F]/g, "");
+}
+
+function readStrictNumber(e, fallback) {
+  const raw = readInputText(e, "");
+  if (raw.trim() === "") return fallback;
+  if (!/^-?\d*(\.\d*)?$/.test(raw.trim())) return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : fallback;
 }
 
 function previewBarStyle(cfg) {
@@ -2835,7 +2846,7 @@ function DesignPickerModal({ open, onClose, onPick, presets }) {
         </div>
         {/* <div className="ab-design-dialog__footer">
           <button type="button" className="ab-design-dialog__skip" onClick={onClose}>
-            Skip — configure from scratch
+            Skip - configure from scratch
           </button>
         </div> */}
       </div>
@@ -2996,7 +3007,7 @@ function AnnouncementCreateModal({
               <s-text-field
                 label="Internal name"
                 value={name}
-                onChange={(e) => setName(e.currentTarget.value)}
+                onChange={(e) => setName(readInputText(e, ""))}
                 autocomplete="off"
                 required
               />
@@ -3046,8 +3057,45 @@ function AnnouncementCreateModal({
                       onChange={(e) =>
                         setConfig((c) => ({
                           ...c,
-                          marqueeSpeedSeconds: Math.max(4, Number(e.target?.value) || c.marqueeSpeedSeconds),
+                          marqueeSpeedSeconds: Math.max(4, readStrictNumber(e, c.marqueeSpeedSeconds)),
                         }))
+                      }
+                    />
+                  ) : null}
+                  {barType === "marquee" ? (
+                    <s-grid gridTemplateColumns="1fr 1fr" gap="base">
+                      <s-text-field
+                        label="Separator icon"
+                        value={String(config.marqueeSeparatorIcon ?? "•")}
+                        onChange={(e) =>
+                          setConfig((c) => ({
+                            ...c,
+                            marqueeSeparatorIcon:
+                              readInputText(e, "•").trim() || "•",
+                          }))
+                        }
+                      />
+                      <s-text-field
+                        label="Separator spacing (px)"
+                        type="number"
+                        min={0}
+                        max={80}
+                        value={String(config.marqueeSeparatorGapPx ?? 16)}
+                        onChange={(e) =>
+                          setConfig((c) => ({
+                            ...c,
+                            marqueeSeparatorGapPx: Math.max(0, readStrictNumber(e, c.marqueeSeparatorGapPx ?? 16)),
+                          }))
+                        }
+                      />
+                    </s-grid>
+                  ) : null}
+                  {barType === "marquee" ? (
+                    <s-checkbox
+                      label="Pause marquee on mouse hover"
+                      checked={config.marqueePauseOnHover === true}
+                      onChange={(e) =>
+                        setConfig((c) => ({ ...c, marqueePauseOnHover: e.target?.checked ?? false }))
                       }
                     />
                   ) : null}
@@ -3062,7 +3110,7 @@ function AnnouncementCreateModal({
                       onChange={(e) =>
                         setConfig((c) => ({
                           ...c,
-                          rotateIntervalMs: Math.max(1500, Number(e.target?.value) || c.rotateIntervalMs),
+                          rotateIntervalMs: Math.max(1500, readStrictNumber(e, c.rotateIntervalMs)),
                         }))
                       }
                     />
@@ -3084,7 +3132,8 @@ function AnnouncementCreateModal({
                           onChange={(e) =>
                             setConfig((c) => {
                               const messages = [...c.messages];
-                              messages[i] = e.currentTarget.value;
+                              const nextValue = readInputText(e, "");
+                              messages[i] = nextValue;
                               return { ...c, messages };
                             })
                           }
@@ -3152,7 +3201,7 @@ function AnnouncementCreateModal({
                       max={16}
                       value={String(config.borderWidthPx)}
                       onChange={(e) =>
-                        setConfig((c) => ({ ...c, borderWidthPx: Math.max(0, Number(e.target?.value) || 0) }))
+                        setConfig((c) => ({ ...c, borderWidthPx: Math.max(0, readStrictNumber(e, c.borderWidthPx)) }))
                       }
                     />
                     <s-text-field
@@ -3164,7 +3213,7 @@ function AnnouncementCreateModal({
                       onChange={(e) =>
                         setConfig((c) => ({
                           ...c,
-                          fontSizePx: Math.max(10, Number(e.target?.value) || c.fontSizePx),
+                          fontSizePx: Math.max(10, readStrictNumber(e, c.fontSizePx)),
                         }))
                       }
                     />
@@ -3187,7 +3236,7 @@ function AnnouncementCreateModal({
                       max={48}
                       value={String(config.paddingYpx)}
                       onChange={(e) =>
-                        setConfig((c) => ({ ...c, paddingYpx: Math.max(0, Number(e.target?.value) || 0) }))
+                        setConfig((c) => ({ ...c, paddingYpx: Math.max(0, readStrictNumber(e, c.paddingYpx)) }))
                       }
                     />
                     <s-text-field
@@ -3197,7 +3246,7 @@ function AnnouncementCreateModal({
                       max={64}
                       value={String(config.paddingXpx)}
                       onChange={(e) =>
-                        setConfig((c) => ({ ...c, paddingXpx: Math.max(0, Number(e.target?.value) || 0) }))
+                        setConfig((c) => ({ ...c, paddingXpx: Math.max(0, readStrictNumber(e, c.paddingXpx)) }))
                       }
                     />
                   </s-grid>
@@ -3209,7 +3258,7 @@ function AnnouncementCreateModal({
                   <s-text-field
                     label="Link URL (optional)"
                     value={config.linkUrl}
-                    onChange={(e) => setConfig((c) => ({ ...c, linkUrl: e.target?.value ?? "" }))}
+                    onChange={(e) => setConfig((c) => ({ ...c, linkUrl: readInputText(e, "") }))}
                     placeholder="https://"
                   />
                   <s-checkbox
@@ -3222,7 +3271,7 @@ function AnnouncementCreateModal({
                   <s-text-field
                     label="CTA button label (optional)"
                     value={config.ctaLabel ?? ""}
-                    onChange={(e) => setConfig((c) => ({ ...c, ctaLabel: e.target?.value ?? "" }))}
+                    onChange={(e) => setConfig((c) => ({ ...c, ctaLabel: readInputText(e, "") }))}
                   />
                   <ColorPickerField
                     label="CTA button color"
@@ -3299,7 +3348,7 @@ function AnnouncementCreateModal({
         <div className="ab-design-dialog__footer">
           <s-stack direction="inline" gap="small">
             <s-button type="button" variant="primary" onClick={onSubmit}>
-              {isEditing ? "Save changes" : "Create"}
+              {isEditing ? "Save changes" : "Save"}
             </s-button>
             {/* {isEditing ? (
               <s-button type="button" variant="secondary" tone="critical" onClick={onDelete}>
@@ -3527,14 +3576,27 @@ function AnnouncementPreview({
       <div style={{ width: "100%" }} dangerouslySetInnerHTML={{ __html: trimmedCustom }} />
     );
   } else if (barType === "marquee") {
-    /* En spaces + bullet (U+2022), same as storefront marquee separator */
-    const sep = "\u2002\u2022\u2002";
-    const text = config.messages.join(sep);
+    const sepIcon = String(config.marqueeSeparatorIcon ?? "•").trim() || "•";
+    const sepPad = Math.max(0, Number(config.marqueeSeparatorGapPx) || 16) / 2;
+    const segment = (
+      <>
+        {config.messages.map((msg, i) => (
+          <span key={`mq-${i}`} style={{ display: "inline-flex", alignItems: "center" }}>
+            <span style={{ display: "inline-flex", alignItems: "center" }}>{linkify(msg)}</span>
+            <span
+              aria-hidden="true"
+              style={{ display: "inline-flex", alignItems: "center", paddingInline: sepPad, opacity: 0.8 }}
+            >
+              {sepIcon}
+            </span>
+          </span>
+        ))}
+      </>
+    );
     const doubled = (
       <>
-        {linkify(text)}
-        {sep}
-        {linkify(text)}
+        {segment}
+        {segment}
       </>
     );
     body = (
@@ -3805,182 +3867,24 @@ function FixedAnnouncementPreviewShell({
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
-  const shop = session.shop;
   const url = new URL(request.url);
   const editId = url.searchParams.get("edit");
-
-  const bars = await prisma.announcementHeader.findMany({
-    where: { shop },
-    orderBy: { updatedAt: "desc" },
-  });
-
-  const editingBar = editId ? bars.find((b) => b.id === editId) ?? null : null;
-
-  const clientId = getShopifyAppClientId();
-  const storeHandle = shop.replace(/\.myshopify\.com$/i, "");
-  const editorBase = `https://admin.shopify.com/store/${storeHandle}/themes/current/editor`;
-  const embedQuery = new URLSearchParams({
-    context: "apps",
-    activateAppId: `${clientId}/${ANNOUNCE_EMBED_HANDLE}`,
-  });
-  const blockHeaderQuery = new URLSearchParams({
-    template: "index",
-    addAppBlockId: `${clientId}/${ANNOUNCE_BLOCK_HANDLE}`,
-    target: "sectionGroup:header",
-  });
-
-  return {
-    shop,
-    bars,
-    editingBar,
-    announcementBarEditorUrl: `${editorBase}?${embedQuery.toString()}`,
-    announcementBarBlockHeaderUrl: `${editorBase}?${blockHeaderQuery.toString()}`,
-    clientIdConfigured: Boolean(clientId),
-  };
+  return loadAnnouncementHeaderAdminContext(session.shop, editId);
 };
 
 export const action = async ({ request }) => {
   const { session } = await authenticate.admin(request);
-  const shop = session.shop;
   const form = await request.formData();
-  const intent = String(form.get("intent") || "");
-
-  if (intent === "delete") {
-    const id = String(form.get("id") || "");
-    await prisma.announcementHeader.deleteMany({ where: { id, shop } });
-    return { ok: true, deleted: true };
-  }
-
-  const name = String(form.get("name") || "").trim();
-  const barType = String(form.get("barType") || "sticky");
-  const configJson = String(form.get("configJson") || "{}");
-  const customHtml = String(form.get("customHtml") ?? "");
-  const customLiquid = String(form.get("customLiquid") ?? "");
-  const customCss = String(form.get("customCss") ?? "");
-  const templateJsonRaw = String(form.get("templateJson") || "").trim();
-  const id = String(form.get("id") || "");
-
-  const cfgParsed = parseConfig(configJson);
-  const sectionHtmlIdRaw = String(cfgParsed.sectionHtmlId ?? "").trim();
-  const parsedSectionId = normalizeAnnouncementSectionHtmlId(sectionHtmlIdRaw);
-  if (sectionHtmlIdRaw && !parsedSectionId) {
-    return {
-      ok: false,
-      error:
-        "Section HTML ID must start with a letter and only contain letters, numbers, hyphens, and underscores.",
-    };
-  }
-  const sectionHtmlIdFinal = parsedSectionId || generateAnnouncementSectionHtmlId();
-
-  const others = await prisma.announcementHeader.findMany({
-    where: { shop, ...(id ? { NOT: { id } } : {}) },
-    select: { id: true, configJson: true },
-  });
-  for (const row of others) {
-    if (resolveSectionHtmlIdFromHeader(row) === sectionHtmlIdFinal) {
-      return {
-        ok: false,
-        error: "That section HTML ID is already used by another announcement bar in this shop.",
-      };
-    }
-  }
-
-  const cfgOut = { ...cfgParsed, sectionHtmlId: sectionHtmlIdFinal };
-  const configJsonOut = JSON.stringify(cfgOut);
-
-  if (!name) {
-    return { ok: false, error: "Name is required." };
-  }
-  const templatePayload = buildAnnouncementTemplate({
-    rowId: id || undefined,
-    name,
-    barType,
-    configJson: configJsonOut,
-    customHtml,
-    customLiquid,
-    customCss,
-    templateJson: templateJsonRaw,
-    sectionHtmlId: sectionHtmlIdFinal,
-  });
-
-  if (intent === "create") {
-    let created;
-    try {
-      created = await prisma.announcementHeader.create({
-        data: {
-          shop,
-          name,
-          barType,
-          configJson: configJsonOut,
-          templateJson: JSON.stringify(templatePayload),
-          customHtml,
-          customLiquid,
-          customCss,
-        },
-      });
-    } catch (error) {
-      const message = String(error?.message || "");
-      if (!message.includes("Unknown argument `templateJson`")) throw error;
-      created = await prisma.announcementHeader.create({
-        data: {
-          shop,
-          name,
-          barType,
-          configJson: configJsonOut,
-          customHtml,
-          customLiquid,
-          customCss,
-        },
-      });
-    }
-    return { ok: true, createdId: created.id };
-  }
-
-  if (intent === "update") {
-    let result;
-    try {
-      result = await prisma.announcementHeader.updateMany({
-        where: { id, shop },
-        data: {
-          name,
-          barType,
-          configJson: configJsonOut,
-          templateJson: JSON.stringify(templatePayload),
-          customHtml,
-          customLiquid,
-          customCss,
-        },
-      });
-    } catch (error) {
-      const message = String(error?.message || "");
-      if (!message.includes("Unknown argument `templateJson`")) throw error;
-      result = await prisma.announcementHeader.updateMany({
-        where: { id, shop },
-        data: {
-          name,
-          barType,
-          configJson: configJsonOut,
-          customHtml,
-          customLiquid,
-          customCss,
-        },
-      });
-    }
-    if (result.count === 0) {
-      return { ok: false, error: "Bar not found." };
-    }
-    return { ok: true };
-  }
-
-  return { ok: false, error: "Unknown action." };
+  return handleAnnouncementHeaderAdminAction(session.shop, form);
 };
 
-export default function AnnouncementBarsPage() {
-  const {
-    shop,
-    bars,
-    editingBar,
-  } = useLoaderData();
+export function AnnouncementHeaderAdmin({
+  loaderData,
+  routePrefix = "/app/announcement-bars",
+  showTable = true,
+  navigateQueryStyle = "standalone",
+}) {
+  const { shop, bars, editingBar, pendingHeaderCreate } = loaderData;
   const actionData = useActionData();
   const location = useLocation();
   const navigate = useNavigate();
@@ -4050,6 +3954,22 @@ export default function AnnouncementBarsPage() {
   );
 
   useEffect(() => {
+    if (!pendingHeaderCreate) return;
+    setName("");
+    setBarType("sticky");
+    setConfig(defaultConfig());
+    setCustomHtml("");
+    setCustomLiquid("");
+    setCustomCss("");
+    setSectionHtmlId(generateAnnouncementSectionHtmlId());
+    setCreateActiveTab("messages");
+    setSelectedTemplateId("");
+    setDesignModalOpen(true);
+    setCreateModalOpen(false);
+    navigate(withShopifyParams(`${routePrefix}?kind=header`), { replace: true });
+  }, [pendingHeaderCreate, navigate, routePrefix, withShopifyParams]);
+
+  useEffect(() => {
     if (editingBar) {
       setName(editingBar.name);
       setBarType(editingBar.barType);
@@ -4078,15 +3998,35 @@ export default function AnnouncementBarsPage() {
     if (actionData?.ok && actionData?.createdId) {
       setCreateModalOpen(false);
       setDesignModalOpen(false);
-      navigate(withShopifyParams("/app/announcement-bars"));
+      // Return to list without `edit` — otherwise loader sets `editingBar` and the edit modal opens.
+      const listPath =
+        navigateQueryStyle === "unified" ? `${routePrefix}?kind=header` : routePrefix;
+      navigate(withShopifyParams(listPath));
     }
-  }, [actionData?.createdId, actionData?.ok, navigate, withShopifyParams]);
+  }, [
+    actionData?.createdId,
+    actionData?.ok,
+    navigate,
+    navigateQueryStyle,
+    routePrefix,
+    withShopifyParams,
+  ]);
 
   useEffect(() => {
     if (actionData?.ok && actionData?.deleted && editingBar) {
-      navigate(withShopifyParams("/app/announcement-bars"));
+      const cleared =
+        navigateQueryStyle === "unified" ? `${routePrefix}?kind=header` : routePrefix;
+      navigate(withShopifyParams(cleared));
     }
-  }, [actionData?.deleted, actionData?.ok, editingBar, navigate, withShopifyParams]);
+  }, [
+    actionData?.deleted,
+    actionData?.ok,
+    editingBar,
+    navigate,
+    navigateQueryStyle,
+    routePrefix,
+    withShopifyParams,
+  ]);
 
   const handleSave = useCallback(
     (e) => {
@@ -4104,6 +4044,7 @@ export default function AnnouncementBarsPage() {
       fd.set("customLiquid", customLiquid);
       fd.set("customCss", customCss);
       fd.set("templateJson", String(editingBar?.templateJson || "{}"));
+      fd.set("recordKind", "header");
       submit(fd, { method: "post" });
     },
     [
@@ -4128,9 +4069,11 @@ export default function AnnouncementBarsPage() {
     setCustomCss("");
     setSectionHtmlId(generateAnnouncementSectionHtmlId());
     if (editingBar) {
-      navigate(withShopifyParams("/app/announcement-bars"));
+      const cleared =
+        navigateQueryStyle === "unified" ? `${routePrefix}?kind=header` : routePrefix;
+      navigate(withShopifyParams(cleared));
     }
-  }, [editingBar, navigate, withShopifyParams]);
+  }, [editingBar, navigate, navigateQueryStyle, routePrefix, withShopifyParams]);
 
   const openCreateFlow = useCallback(() => {
     handleClear();
@@ -4320,7 +4263,11 @@ export default function AnnouncementBarsPage() {
         open={createModalOpen}
         onClose={() => {
           setCreateModalOpen(false);
-          if (editingBar) navigate(withShopifyParams("/app/announcement-bars"));
+          if (editingBar) {
+            const cleared =
+              navigateQueryStyle === "unified" ? `${routePrefix}?kind=header` : routePrefix;
+            navigate(withShopifyParams(cleared));
+          }
         }}
         onSubmit={handleSave}
         onDelete={() => {
@@ -4355,10 +4302,12 @@ export default function AnnouncementBarsPage() {
           const fd = new FormData();
           fd.set("intent", "delete");
           fd.set("id", deleteTarget.id);
+          fd.set("recordKind", "header");
           submit(fd, { method: "post" });
           setDeleteTarget(null);
         }}
       />
+      {showTable ? (
       <s-page heading="Announcement bars">
       {/* ── Bars table ── */}
       <s-section>
@@ -4411,14 +4360,21 @@ export default function AnnouncementBarsPage() {
         ) : (
           <s-table variant="auto">
             <s-table-header-row>
+            <s-table-header listSlot="labeled">Section ID</s-table-header>
               <s-table-header listSlot="primary">Name</s-table-header>
               <s-table-header listSlot="inline">Type</s-table-header>
-              <s-table-header listSlot="labeled">Section ID</s-table-header>
               <s-table-header listSlot="labeled">Actions</s-table-header>
             </s-table-header-row>
             <s-table-body>
               {paginatedBars.map((b) => (
                 <s-table-row key={b.id}>
+                   <s-table-cell>
+                    <s-stack direction="block" gap="small-100">
+                      <s-text fontVariantNumeric="tabular-nums" type="strong">
+                        {resolveSectionHtmlIdFromHeader(b)}
+                      </s-text>
+                    </s-stack>
+                  </s-table-cell>
                   <s-table-cell>
                     <s-text type="strong">{b.name}</s-text>
                   </s-table-cell>
@@ -4431,22 +4387,20 @@ export default function AnnouncementBarsPage() {
                           : b.barType}
                     </s-text>
                   </s-table-cell>
-                  <s-table-cell>
-                    <s-stack direction="block" gap="small-100">
-                      <s-text fontVariantNumeric="tabular-nums" type="strong">
-                        {resolveSectionHtmlIdFromHeader(b)}
-                      </s-text>
-                    </s-stack>
-                  </s-table-cell>
+                 
                   <s-table-cell>
                     <s-stack direction="inline" gap="small-100">
                       <s-button
                         type="button"
                         variant="tertiary"
                         icon="edit"
-                        onClick={() =>
-                          navigate(withShopifyParams(`/app/announcement-bars?edit=${b.id}`))
-                        }
+                        onClick={() => {
+                          const q =
+                            navigateQueryStyle === "unified"
+                              ? `kind=header&edit=${encodeURIComponent(b.id)}`
+                              : `edit=${encodeURIComponent(b.id)}`;
+                          navigate(withShopifyParams(`${routePrefix}?${q}`));
+                        }}
                       >
                          
                       </s-button>
@@ -4514,7 +4468,20 @@ export default function AnnouncementBarsPage() {
         ) : null}
       </s-section>
     </s-page>
+      ) : null}
     </>
+  );
+}
+
+export default function AnnouncementBarsPage() {
+  const data = useLoaderData();
+  return (
+    <AnnouncementHeaderAdmin
+      loaderData={data}
+      routePrefix="/app/announcement-bars"
+      showTable
+      navigateQueryStyle="standalone"
+    />
   );
 }
 

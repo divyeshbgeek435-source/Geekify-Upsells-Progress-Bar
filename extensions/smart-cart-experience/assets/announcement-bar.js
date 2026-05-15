@@ -14,7 +14,15 @@
   if (!script || !script.dataset) return;
   script.setAttribute("data-sce-ab-ran", "1");
 
-  var sectionId = (script.dataset.sectionId || "").trim();
+  function normalizeThemeSectionId(raw) {
+    var s = String(raw == null ? "" : raw).trim();
+    try {
+      if (s.indexOf("%") !== -1) s = decodeURIComponent(s);
+    } catch (e) {}
+    return s.replace(/[\u200B-\u200D\uFEFF]/g, "").trim();
+  }
+
+  var sectionId = normalizeThemeSectionId(script.dataset.sectionId);
   var apiUrl = (script.dataset.apiUrl || "").trim();
   var zIndex = parseInt(String(script.dataset.zIndex || "1000"), 10) || 1000;
 
@@ -24,21 +32,26 @@
   var managedIntervals = [];
 
   var hookId = (script.dataset.sceAbHook || "").trim();
-  var placement = String(script.dataset.placement || "sticky")
+  var hookHost = hookId ? document.getElementById(hookId) : null;
+  var placement = String(script.dataset.placement || "inline")
     .trim()
     .toLowerCase();
   var inlineAnchor = null;
-  if (placement === "inline" && hookId) {
-    inlineAnchor = document.getElementById(hookId);
+  if (placement === "inline" && hookHost) {
+    inlineAnchor = hookHost;
   }
 
   function showInlineError(message) {
-    if (!inlineAnchor || !document.body.contains(inlineAnchor)) return;
-    inlineAnchor.innerHTML =
+    var anchor = hookHost || inlineAnchor;
+    if (!anchor || !document.body.contains(anchor)) {
+      console.warn("[SCE announcement bar]", String(message || ""));
+      return;
+    }
+    anchor.innerHTML =
       '<div style="padding:10px;border:1px solid #fecaca;background:#fff1f2;color:#991b1b;font-size:12px;border-radius:6px;">' +
       String(message || "Announcement bar failed to load.") +
       "</div>";
-    inlineAnchor.style.minHeight = "";
+    anchor.style.minHeight = "";
   }
 
   function defaults() {
@@ -60,6 +73,9 @@
       lineHeight: 1.35,
       maxContentWidthPx: 0,
       marqueeSpeedSeconds: 22,
+      marqueeSeparatorIcon: "•",
+      marqueeSeparatorGapPx: 16,
+      marqueePauseOnHover: false,
       rotateIntervalMs: 4500,
       linkUrl: "",
       linkUnderline: true,
@@ -89,6 +105,9 @@
     d.paddingXpx = Math.max(0, Number(d.paddingXpx) || 0);
     d.borderRadiusPx = Math.max(0, Number(d.borderRadiusPx) || 0);
     d.marqueeSpeedSeconds = Math.max(4, Number(d.marqueeSpeedSeconds) || 22);
+    d.marqueeSeparatorIcon = String(d.marqueeSeparatorIcon || "•").trim() || "•";
+    d.marqueeSeparatorGapPx = Math.max(0, Number(d.marqueeSeparatorGapPx) || 16);
+    d.marqueePauseOnHover = d.marqueePauseOnHover === true;
     d.rotateIntervalMs = Math.max(1500, Number(d.rotateIntervalMs) || 4500);
     d.lineHeight =
       typeof d.lineHeight === "number" && d.lineHeight > 0 ? d.lineHeight : defaults().lineHeight;
@@ -173,6 +192,11 @@
     el.style.letterSpacing = cfg.letterSpacingEm ? cfg.letterSpacingEm + "em" : "normal";
     el.style.lineHeight = String(cfg.lineHeight);
     el.style.setProperty("--sce-ab-font-family", fontStack(cfg.fontFamily));
+    el.style.setProperty("--sce-ab-separator-gap", String(cfg.marqueeSeparatorGapPx) + "px");
+    el.style.setProperty(
+      "--sce-ab-marquee-hover-play-state",
+      cfg.marqueePauseOnHover ? "paused" : "running",
+    );
     el.style.setProperty(
       "--sce-ab-link-decoration",
       cfg.linkUnderline ? "underline" : "none",
@@ -294,6 +318,48 @@
     );
   }
 
+  function buildMarqueeSegmentHtml(cfg) {
+    var icon = escHtmlStr(String(cfg.marqueeSeparatorIcon || "•").trim() || "•");
+    var out = [];
+    for (var i = 0; i < cfg.messages.length; i++) {
+      out.push(
+        '<span class="sce-announcement-bar__marquee-item">' +
+          buildTextHtml(cfg, cfg.messages[i] || "") +
+          "</span>",
+      );
+      out.push('<span class="sce-announcement-bar__marquee-separator" aria-hidden="true">' + icon + "</span>");
+    }
+    return out.join("");
+  }
+
+  function fillMarqueeTrack(root, cfg) {
+    if (!root) return;
+    var marquee = root.querySelector(".sce-announcement-bar__marquee");
+    var track = root.querySelector(".sce-announcement-bar__track");
+    var baseSegment = root.querySelector(".sce-announcement-bar__segment");
+    if (!marquee || !track || !baseSegment) return;
+
+    var marqueeWidth = Math.ceil(marquee.getBoundingClientRect().width || 0);
+    var segmentWidth = Math.ceil(baseSegment.getBoundingClientRect().width || 0);
+    if (!marqueeWidth || !segmentWidth) return;
+
+    /* Ensure enough copies exist so the viewport is always filled while one segment loops. */
+    var currentWidth = segmentWidth * track.querySelectorAll(".sce-announcement-bar__segment").length;
+    var minTrackWidth = marqueeWidth * 2 + segmentWidth;
+    var guard = 0;
+    while (currentWidth < minTrackWidth && guard < 24) {
+      var clone = baseSegment.cloneNode(true);
+      clone.classList.add("sce-announcement-bar__segment--clone");
+      clone.setAttribute("aria-hidden", "true");
+      track.appendChild(clone);
+      currentWidth += segmentWidth;
+      guard += 1;
+    }
+
+    track.style.setProperty("--sce-ab-loop-width", segmentWidth + "px");
+    track.style.setProperty("--sce-ab-marquee-duration", cfg.marqueeSpeedSeconds + "s");
+  }
+
   function mountStickyBar(cfg, innerHtml, sectionHtmlId) {
     removeExisting();
     var bar = document.createElement("div");
@@ -305,15 +371,6 @@
     applyBarStyles(bar, cfg);
     bar.innerHTML = innerHtml;
     document.body.insertBefore(bar, document.body.firstChild);
-
-    var h = bar.offsetHeight;
-    var spacer = document.createElement("div");
-    spacer.className = "sce-announcement-bar__spacer";
-    spacer.setAttribute("data-sce-announcement-spacer", "1");
-    spacer.style.setProperty("--sce-ab-height", h + "px");
-    spacer.style.height = h + "px";
-    document.body.insertBefore(spacer, document.body.firstChild);
-    document.body.classList.add("sce-announcement-bar--sticky-pad");
     return bar;
   }
 
@@ -391,20 +448,19 @@
           };
 
     if (barType === "marquee") {
-      /* En spaces around bullet: readable gap without HTML tags. */
-      var sep = "\u2002\u2022\u2002";
-      var text = cfg.messages.join(sep);
-      var doubled = buildTextHtml(cfg, text) + sep + buildTextHtml(cfg, text);
+      var segment = '<span class="sce-announcement-bar__segment">' + buildMarqueeSegmentHtml(cfg) + "</span>";
       var html = innerWrap(
         cfg,
         '<div class="sce-announcement-bar__marquee"><div class="sce-announcement-bar__track" style="--sce-ab-marquee-duration:' +
           cfg.marqueeSpeedSeconds +
           's">' +
-          doubled +
+          segment +
+          segment +
           "</div></div>",
         "sce-announcement-bar__text-wrap--marquee",
       );
       var root = mount(cfg, html);
+      fillMarqueeTrack(root, cfg);
       bindDismiss(root, cfg, dismissKey);
       return;
     }
@@ -460,31 +516,126 @@
     bindDismiss(rootS, cfg, dismissKey);
   }
 
-  var url = apiUrl;
-  if (sectionId) {
-    var joinChar = apiUrl.indexOf("?") >= 0 ? "&" : "?";
-    url = apiUrl + joinChar + "sectionId=" + encodeURIComponent(sectionId);
+  function buildFetchUrl(base) {
+    var u = String(base || "").trim();
+    if (!sectionId) return u;
+    var joinChar = u.indexOf("?") >= 0 ? "&" : "?";
+    return u + joinChar + "sectionId=" + encodeURIComponent(sectionId);
   }
 
+  /**
+   * Shopify maps storefront /apps/{subpath}/rest to app proxy url + /rest.
+   * Legacy proxy url at app root forwards /apps/sce/foo → /foo on the app server.
+   */
+  function alternateShortPath(primaryBase) {
+    var b = String(primaryBase || "").trim();
+    if (b.indexOf("/apps/sce/") !== 0) return "";
+    return b.slice("/apps/sce".length) || "/";
+  }
+
+  function uniqueStrings(list) {
+    var out = [];
+    var seen = {};
+    for (var i = 0; i < list.length; i++) {
+      var s = String(list[i] || "").trim();
+      if (!s || seen[s]) continue;
+      seen[s] = true;
+      out.push(s);
+    }
+    return out;
+  }
+
+  var primaryApiBase = apiUrl;
+  var candidateBases = uniqueStrings([
+    primaryApiBase,
+    alternateShortPath(primaryApiBase),
+    "/apps/sce/announcement-bar",
+    "/announcement-bar",
+  ]);
+
   function fetchAnnouncementData() {
-    return fetch(url, { credentials: "same-origin", headers: { Accept: "application/json" } })
-    .then(function (r) {
+    function parseResponseBody(r, text) {
+      var raw = String(text || "").trim();
+      if (!raw) {
+        var st = r.status;
+        var emptyHint =
+          st === 400 || st === 401
+            ? "App proxy verification failed (empty response). Use your storefront URL (…myshopify.com), not the app tunnel. Run shopify app dev; in Partners → App proxy, match URL, prefix apps, subpath sce, and API secret to this app."
+            : "App proxy returned an empty body (HTTP " +
+              st +
+              "). Check tunnel, App proxy settings, and that the theme loads on the real shop domain.";
+        return {
+          status: st,
+          data: {
+            ok: false,
+            error: "empty_body",
+            hint: emptyHint,
+          },
+        };
+      }
       var ct = (r.headers.get("content-type") || "").toLowerCase();
-      if (ct.indexOf("application/json") === -1) {
+      var looksLikeJson =
+        ct.indexOf("application/json") !== -1 ||
+        ct.indexOf("text/json") !== -1 ||
+        /^\s*[\[{]/.test(raw);
+      if (!looksLikeJson && raw) {
         console.warn(
-          "[SCE announcement bar] Expected JSON but got",
+          "[SCE announcement bar] Non-JSON response",
           r.status,
-          ct || "(no content-type). Is the app proxy URL correct in Shopify (Partners / app dev) and the app running?",
+          ct || "(no content-type)",
+          raw.slice(0, 160),
         );
         showInlineError(
-          "Proxy error: expected JSON. Run `npm run dev -- --reset` and ensure app proxy is configured.",
+          "App proxy returned HTML instead of JSON (HTTP " +
+            r.status +
+            "). In Partners → App setup → App proxy, confirm proxy URL, path prefix apps, and subpath sce match your app.",
         );
         return null;
       }
-      return r.json().then(function (data) {
-        return { status: r.status, data: data };
+      var data = null;
+      try {
+        data = raw ? JSON.parse(raw) : {};
+      } catch (parseErr) {
+        console.warn("[SCE announcement bar] JSON parse failed", r.status, raw.slice(0, 200));
+        showInlineError(
+          "Invalid JSON from app proxy (HTTP " +
+            r.status +
+            "). Check that GET /apps/sce/announcement-bar routes to your app and returns JSON.",
+        );
+        return null;
+      }
+      return { status: r.status, data: data };
+    }
+
+    function tryCandidate(index) {
+      if (index >= candidateBases.length) {
+        return Promise.resolve({
+          status: 404,
+          data: {
+            ok: false,
+            error: "empty_body",
+            hint:
+              "No response from any proxy path tried. Run shopify app dev (or deploy), ensure shopify.app.toml includes [app_proxy] url=/apps/sce, accept the write_app_proxy scope, or set \"App proxy API path\" in this block if your proxy URL was customized in Shopify admin.",
+          },
+        });
+      }
+      var fetchUrl = buildFetchUrl(candidateBases[index]);
+      return fetch(fetchUrl, {
+        credentials: "same-origin",
+        headers: { Accept: "application/json" },
+        cache: "no-store",
+      }).then(function (r) {
+        return r.text().then(function (text) {
+          var raw = String(text || "").trim();
+          if (!raw && r.status === 404 && index + 1 < candidateBases.length) {
+            return tryCandidate(index + 1);
+          }
+          return parseResponseBody(r, text);
+        });
       });
-    });
+    }
+
+    return tryCandidate(0);
   }
 
   function dataVersion(data) {
@@ -516,7 +667,15 @@
     show(barType, cfg, dismissKey, inlineAnchor, sectionHtmlId);
   }
 
+  function ensureHookHost() {
+    if (hookId && !hookHost) {
+      hookHost = document.getElementById(hookId);
+      if (placement === "inline" && hookHost) inlineAnchor = hookHost;
+    }
+  }
+
   function refreshAnnouncement() {
+    ensureHookHost();
     if (!sectionId) {
       removeExisting();
       showInlineError("Set a Section ID in this block to render an announcement.");
@@ -533,11 +692,21 @@
             wrapped.status,
             data.hint || "",
             "Request URL:",
-            url,
+            candidateBases.join(", "),
           );
-          showInlineError(
-            "Announcement not found. Check Bar ID and make sure the bar is Active in app admin.",
-          );
+          var errCode = String(data.error || "");
+          var hint = String(data.hint || "").trim();
+          var msg =
+            errCode === "missing_section_id"
+              ? "Set the Section ID in this block to match an announcement in the app."
+              : errCode === "missing_shop"
+                ? "Shop could not be determined from the app proxy request. Confirm App proxy settings."
+                : errCode === "app_proxy_auth_failed"
+                  ? hint ||
+                    "App proxy request was not verified. Open the storefront on your shop domain and confirm App proxy configuration."
+                : hint ||
+                  "Announcement not found. Copy the Section ID from Announcement Bars in the app and paste it here (must match that shop).";
+          showInlineError(msg);
           return;
         }
         var nextVersion = dataVersion(data);
@@ -546,9 +715,13 @@
         lastRenderVersion = nextVersion;
       })
       .catch(function (err) {
-        console.warn("[SCE announcement bar] Request failed", err && err.message ? err.message : err);
+        console.warn("[SCE announcement bar] Request failed", err && err.message ? err.message : err, candidateBases.join(", "));
         if (!lastRenderVersion) {
-          showInlineError("Request failed. Check app dev server is running and refresh preview.");
+          showInlineError(
+            "Could not reach /apps/sce/announcement-bar (connection blocked or refused). " +
+              "If you use Shopify CLI, run shopify app dev so the app proxy tunnel is active. " +
+              "In production, confirm App proxy is configured and this theme preview uses your storefront domain.",
+          );
         }
       });
   }

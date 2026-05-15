@@ -103,7 +103,7 @@ const CONFIG_DEFAULTS = {
   overlayBg: "rgba(15, 23, 42, 0.45)",
   /** Optional paragraph under sub-headline. */
   bodyText: "",
-  /** left | center — content column alignment. */
+  /** left | center - content column alignment. */
   contentAlign: "left",
   /** compact (DD:HH:MM:SS row) | labeled (units under boxes). */
   countdownStyle: "compact",

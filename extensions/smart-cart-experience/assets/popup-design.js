@@ -706,7 +706,7 @@
         });
       }
 
-      /** App-proxy GET verify (loader) — avoids POST-only failures on some setups. */
+      /** App-proxy GET verify (loader) - avoids POST-only failures on some setups. */
       function getVerifyCustomerJson(emailForVerify) {
         var sep = apiUrl.indexOf("?") >= 0 ? "&" : "?";
         var u =
@@ -743,7 +743,7 @@
             if (alreadyCust) {
               msgEl.textContent =
                 base +
-                " This email was already registered — you are subscribed.";
+                " This email was already registered - you are subscribed.";
             } else {
               msgEl.textContent = base;
             }

@@ -1,12 +1,18 @@
 (function () {
+  /** Deferred scripts: `document.currentScript` is null - never use the last tag in the DOM (mixes embed vs section configs). */
   var script = document.currentScript;
-  if (!script) {
-    var scopedScripts = document.querySelectorAll('script[src*="free-shipping-progress.js"]');
-    if (scopedScripts && scopedScripts.length) {
-      script = scopedScripts[scopedScripts.length - 1];
+  if (!script || !script.dataset) {
+    script = null;
+    var candidates = document.querySelectorAll('script[src*="free-shipping-progress.js"]');
+    for (var si = 0; si < candidates.length; si++) {
+      if (candidates[si].getAttribute("data-sce-fs-ran") !== "1") {
+        script = candidates[si];
+        break;
+      }
     }
   }
-  if (!script) return;
+  if (!script || !script.dataset) return;
+  script.setAttribute("data-sce-fs-ran", "1");
   var rawInstanceKey =
     (script.dataset.instanceId ||
       script.dataset.blockId ||
@@ -51,9 +57,9 @@
   var lockedText = script.dataset.lockedText || "Locked";
   var appliedText = script.dataset.appliedText || "Applied";
   var sequentialHintZero =
-    script.dataset.sequentialHintZero || "Progress: 0% — unlock Tier 1 to start.";
+    script.dataset.sequentialHintZero || "Progress: 0% - unlock Tier 1 to start.";
   var sequentialHintMid =
-    script.dataset.sequentialHintMid || "Progress: 50% — unlock Tier 2 for free shipping.";
+    script.dataset.sequentialHintMid || "Progress: 50% - unlock Tier 2 for free shipping.";
   var tier1Icon = script.dataset.tier1Icon || "%";
   var tier2Icon = script.dataset.tier2Icon || "🚚";
   var subtotalLabel = script.dataset.subtotalLabel || "Current subtotal";
@@ -94,6 +100,78 @@
     script.dataset.sequentialMsg2 ||
     "Free shipping unlocked";
   var storeMoneyFormat = script.dataset.moneyFormat || "";
+
+  /** Merged progress bar design from cart-access (includes barStyle for premium tier bar). */
+  var lastProgressBarDesign = null;
+
+  function defaultBarStyleStorefront() {
+    function phInactive() {
+      return {
+        barFill: "",
+        barTrack: "",
+        badgeBackgroundColor: "#ffffff",
+        badgeBorderColor: "#000000",
+        badgeShadow: "0 0 0 2px #ffffff, 0 2px 10px rgba(0,0,0,0.08)",
+        iconColor: "#000000",
+        iconSizePx: 15,
+        labelColor: "",
+        priceLabelColor: "",
+      };
+    }
+    function phActive() {
+      return {
+        barFill: "#000000",
+        barTrack: "",
+        badgeBackgroundColor: "#000000",
+        badgeBorderColor: "#ffffff",
+        badgeShadow: "0 0 0 2px #ffffff, 0 2px 12px rgba(0,0,0,0.2)",
+        iconColor: "#ffffff",
+        iconSizePx: 15,
+        labelColor: "",
+        priceLabelColor: "",
+      };
+    }
+    return {
+      barMaxWidthPx: 0,
+      barHeightPx: 10,
+      barBorderRadiusPx: 999,
+      barSectionMarginTopPx: 30,
+      barSectionMarginBottomPx: 6,
+      badgeSizePx: 46,
+      captionGapPx: 8,
+      transitionMs: 280,
+      badgeHoverScalePercent: 104,
+      tier1: { before: phInactive(), after: phActive() },
+      tier2: { before: phInactive(), after: phActive() },
+    };
+  }
+
+  function storefrontBarStyle() {
+    var bs = lastProgressBarDesign && lastProgressBarDesign.barStyle;
+    return bs && typeof bs === "object" ? bs : defaultBarStyleStorefront();
+  }
+
+  function resolveSeqBarColors(bs, baseFill, baseTrack, tier1Complete, tier2Complete) {
+    var t1b = (bs.tier1 && bs.tier1.before) || {};
+    var t1a = (bs.tier1 && bs.tier1.after) || {};
+    var t2b = (bs.tier2 && bs.tier2.before) || {};
+    var t2a = (bs.tier2 && bs.tier2.after) || {};
+    var fill = baseFill;
+    var track = baseTrack;
+    if (!tier1Complete) {
+      if (t1b.barFill) fill = t1b.barFill;
+      if (t1b.barTrack) track = t1b.barTrack;
+    } else if (!tier2Complete) {
+      if (t2b.barFill) fill = t2b.barFill;
+      else if (t1a.barFill) fill = t1a.barFill;
+      if (t2b.barTrack) track = t2b.barTrack;
+      else if (t1a.barTrack) track = t1a.barTrack;
+    } else {
+      if (t2a.barFill) fill = t2a.barFill;
+      if (t2a.barTrack) track = t2a.barTrack;
+    }
+    return { fill: fill, track: track };
+  }
 
   /** ISO 4217 currencies with zero minor units (Shopify cart amounts are in those units, not ×100). */
   var ZERO_DECIMAL_CURRENCIES = {
@@ -167,7 +245,10 @@
   var selectorTargets = (script.dataset.targets || "").split(",").map(function (s) {
     return s.trim();
   }).filter(Boolean);
+  /** Section Shipping Progress block: render only inside this script's mount node (#sce-fs-mount-…). */
+  var pinnedMountSelector = (script.dataset.fsMountRoot || "").trim();
   var defaultWidgetTargets = [
+    ".sce-free-shipping-widget",
     ".drawer__inner",
     ".cart-drawer__content",
     "cart-drawer",
@@ -189,6 +270,9 @@
     return merged;
   }
   selectorTargets = withDefaultWidgetTargets(selectorTargets);
+  if (pinnedMountSelector) {
+    selectorTargets = [pinnedMountSelector];
+  }
 
   var logUrl = (script.dataset.logUrl || "").trim();
   var logEnabled = String(script.dataset.logEnabled || "").toLowerCase() === "true";
@@ -215,6 +299,7 @@
   var lastDynamicSyncAt = 0;
   var logPostTimer;
   var pollIntervalId = null;
+  var lastKnownCart = null;
 
   function uniqueElements(list) {
     var unique = [];
@@ -282,7 +367,13 @@
   }
 
   function applyDynamicTierLabels(prismaTiers) {
-    if (!Array.isArray(prismaTiers) || prismaTiers.length === 0) return;
+    if (!Array.isArray(prismaTiers) || prismaTiers.length === 0) {
+      tier1Label = String(script.dataset.tier1Label || "Discount");
+      tier2Label = String(script.dataset.tier2Label || "Free shipping");
+      tier1TagText = String(script.dataset.tier1TagText || "10% OFF");
+      tier2TagText = String(script.dataset.tier2TagText || "Free shipping");
+      return;
+    }
     var active = prismaTiers.filter(function (t) { return t && t.active !== false; });
     active.sort(function (a, b) { return Number(a.minSubtotal || 0) - Number(b.minSubtotal || 0); });
     var t1 = active[0];
@@ -347,7 +438,12 @@
     url += "subtotalCents=" + encodeURIComponent(String(subtotalCents || 0));
     if (cur) url += "&currency=" + encodeURIComponent(cur);
     return safeFetchJson(url).then(function (data) {
-      if (!data || !data.ok) return false;
+      if (!data || !data.ok) {
+        /** Theme JSON tiers are offline placeholders; if the proxy fails, keep the same empty UI as the cart widget. */
+        tiers = [];
+        applyDynamicTierLabels([]);
+        return false;
+      }
       if (data.sequentialMsg0) sequentialMsg0 = String(data.sequentialMsg0);
       if (data.sequentialMsg1) sequentialMsg1 = String(data.sequentialMsg1);
       if (data.sequentialMsg2) sequentialMsg2 = String(data.sequentialMsg2);
@@ -388,7 +484,10 @@
         if (dynamic.hintColor) hintColor = String(dynamic.hintColor);
       }
       if (data.sequentialTitle) sequentialTitle = String(data.sequentialTitle);
-      if (data.selectorTargets) {
+      if (data.progressBarDesign && typeof data.progressBarDesign === "object") {
+        lastProgressBarDesign = data.progressBarDesign;
+      }
+      if (data.selectorTargets && !pinnedMountSelector) {
         var parsedTargets = String(data.selectorTargets)
           .split(",")
           .map(function (s) {
@@ -397,7 +496,7 @@
           .filter(Boolean);
         selectorTargets = withDefaultWidgetTargets(parsedTargets);
       }
-      if (data.nameTargetSelectors) {
+      if (data.nameTargetSelectors && !pinnedMountSelector) {
         var parsedNameTargets = String(data.nameTargetSelectors)
           .split(",")
           .map(function (s) {
@@ -406,17 +505,17 @@
           .filter(Boolean);
         if (parsedNameTargets.length) nameTargetSelectors = parsedNameTargets;
       }
-      var mapped = mapPrismaTiersToLegacyShippingTiers(data.tiers);
-      if (!mapped || mapped.length === 0) return false;
+      var prismaTierRows = Array.isArray(data.tiers) ? data.tiers : [];
+      var mapped = mapPrismaTiersToLegacyShippingTiers(prismaTierRows);
+      if (!mapped || mapped.length === 0) {
+        tiers = [];
+        applyDynamicTierLabels([]);
+        return true;
+      }
       var exp = getShopCurrencyExponent(cart);
       var nextTiers = parseTiers(JSON.stringify(mapped), shippingChargeCents, exp);
-      // Keep the widget in 2-tier mode when storefront config already contains two milestones.
-      // Some dynamic responses may only return one active tier temporarily.
-      if (dynamicTierMode && nextTiers.length < 2 && Array.isArray(tiers) && tiers.length >= 2) {
-        nextTiers = tiers;
-      }
       tiers = nextTiers;
-      applyDynamicTierLabels(data.tiers);
+      applyDynamicTierLabels(prismaTierRows);
       return true;
     });
   }
@@ -428,6 +527,41 @@
         return o !== h && o.contains(h);
       });
     });
+  }
+
+  /**
+   * cart-access may return broad selectors (e.g. .product__info-container). Those ancestors also match
+   * .sce-free-shipping-widget inside them; keepDeepestHosts would keep only the parent and drop the app
+   * block root - wrong mount and missing premium styling. Prefer explicit Shipping Progress block hosts.
+   */
+  function preferSceBlockHosts(hosts) {
+    if (!hosts || !hosts.length) return hosts;
+    if (pinnedMountSelector) {
+      var pinned = hosts.filter(function (h) {
+        try {
+          return safeMatchesSelector(h, pinnedMountSelector);
+        } catch (_) {
+          return false;
+        }
+      });
+      var nonPinned = hosts.filter(function (h) {
+        try {
+          return !safeMatchesSelector(h, pinnedMountSelector);
+        } catch (_) {
+          return true;
+        }
+      });
+      var merged = [];
+      if (pinned.length) merged = merged.concat(keepDeepestHosts(pinned));
+      if (nonPinned.length) merged = merged.concat(keepDeepestHosts(nonPinned));
+      merged = uniqueElements(merged);
+      return keepDeepestHosts(merged);
+    }
+    var direct = hosts.filter(function (h) {
+      return safeMatchesSelector(h, ".sce-free-shipping-widget");
+    });
+    if (direct.length) return keepDeepestHosts(direct);
+    return keepDeepestHosts(hosts);
   }
 
   function isCartDrawerHost(host) {
@@ -504,7 +638,7 @@
 
   function removeOrphanInjectedWidgets(validHosts) {
     // Empty host list must not delete widgets: many themes omit cart drawer innards when the cart
-    // is empty, so selectors match nothing briefly — removing here would strip the tier UI until
+    // is empty, so selectors match nothing briefly - removing here would strip the tier UI until
     // a full page reload.
     if (!validHosts || !validHosts.length) return;
     var regions = validHosts.map(mountingRegionForHost).filter(Boolean);
@@ -518,7 +652,7 @@
 
   /**
    * placeWidget() can reparent the root outside `host` (e.g. next to drawer header). The next
-   * update must reuse that node — not create another — or the drawer stacks duplicate widgets.
+   * update must reuse that node - not create another - or the drawer stacks duplicate widgets.
    */
   function findInjectedWidgetRootInHostRegion(host) {
     if (!host) return null;
@@ -623,23 +757,31 @@
     return moneyFormat.replace(tokenMatch[0], amount);
   }
 
+  function stripTrailingZeroDecimals(str) {
+    return str.replace(/([.,])00(?=\s|$|[^0-9])/g, "").replace(/([.,])00$/, "");
+  }
+
   function formatMoney(cents, shopifyMoneyFormat) {
     var activeFormat = shopifyMoneyFormat || storeMoneyFormat || window.Shopify?.money_format || "";
     if (window.Shopify && typeof window.Shopify.formatMoney === "function") {
       try {
-        return window.Shopify.formatMoney(cents, activeFormat || window.Shopify.money_format);
+        return stripTrailingZeroDecimals(
+          window.Shopify.formatMoney(cents, activeFormat || window.Shopify.money_format)
+        );
       } catch (e) {
         /* fallback below */
       }
     }
 
     var formatted = formatUsingMoneyFormat(cents, activeFormat);
-    if (formatted) return formatted;
+    if (formatted) return stripTrailingZeroDecimals(formatted);
 
-    return new Intl.NumberFormat(undefined, {
-      style: "currency",
-      currency: (window.Shopify && window.Shopify.currency && window.Shopify.currency.active) || "USD",
-    }).format(cents / 100);
+    return stripTrailingZeroDecimals(
+      new Intl.NumberFormat(undefined, {
+        style: "currency",
+        currency: (window.Shopify && window.Shopify.currency && window.Shopify.currency.active) || "USD",
+      }).format(cents / 100)
+    );
   }
 
   function parseTiers(raw, defaultShippingCents, currencyExp) {
@@ -687,7 +829,9 @@
 
   /** How many milestone columns to show: 1 or 2 (sequential UI supports at most two). */
   function getDisplayedSequentialTierCount() {
-    if (!tiers || tiers.length === 0) return 1;
+    if (!tiers || tiers.length === 0) {
+      return dynamicTierMode ? 0 : 1;
+    }
     if (dynamicTierMode) {
       return Math.min(2, Math.max(1, tiers.length));
     }
@@ -720,6 +864,14 @@
     }
   }
 
+  /** Normalize theme icon tokens (e.g. "truck") for display inside badges. */
+  function tierIconDisplay(raw, fallback) {
+    var t = String(raw == null ? "" : raw).trim();
+    if (!t) return fallback;
+    if (t.toLowerCase() === "truck") return "🚚";
+    return t;
+  }
+
   function setStepMinAmount(el, minCents) {
     if (!el) return;
     if (!Number.isFinite(minCents) || minCents <= 0) {
@@ -733,25 +885,26 @@
 
   function applyWidgetColors(root) {
     if (!root) return;
-    if (!widgetUseCustomColors) {
-      root.style.backgroundColor = "";
+    if (widgetBackgroundColor) root.style.backgroundColor = widgetBackgroundColor;
+    else root.style.backgroundColor = "";
+    if (widgetUseCustomColors) {
+      if (widgetBorderColor) root.style.borderColor = widgetBorderColor;
+      if (widgetTextColor) {
+        root.style.color = widgetTextColor;
+        var colorTargets = root.querySelectorAll(
+          ".sce-free-shipping-widget__title, .sce-free-shipping-widget__message, .sce-free-shipping-widget__hint, .sce-seq-title, .sce-seq-message, .sce-seq-hint, .sce-seq-bar-cap__label, .sce-seq-bar-cap__price, .sce-milestone"
+        );
+        for (var i = 0; i < colorTargets.length; i += 1) {
+          colorTargets[i].style.color = widgetTextColor;
+        }
+      }
+    } else {
       root.style.color = "";
       root.style.borderColor = "";
       var resetTargets = root.querySelectorAll(
-        ".sce-free-shipping-widget__title, .sce-free-shipping-widget__message, .sce-free-shipping-widget__hint, .sce-seq-title, .sce-seq-message, .sce-seq-hint, .sce-seq-step__label, .sce-seq-step__sub, .sce-seq-step__min, .sce-milestone"
+        ".sce-free-shipping-widget__title, .sce-free-shipping-widget__message, .sce-free-shipping-widget__hint, .sce-seq-title, .sce-seq-message, .sce-seq-hint, .sce-seq-bar-cap__label, .sce-seq-bar-cap__price, .sce-milestone"
       );
       for (var r = 0; r < resetTargets.length; r += 1) resetTargets[r].style.color = "";
-      return;
-    }
-    if (widgetBackgroundColor) root.style.backgroundColor = widgetBackgroundColor;
-    if (widgetBorderColor) root.style.borderColor = widgetBorderColor;
-    if (!widgetTextColor) return;
-    root.style.color = widgetTextColor;
-    var colorTargets = root.querySelectorAll(
-      ".sce-free-shipping-widget__title, .sce-free-shipping-widget__message, .sce-free-shipping-widget__hint, .sce-seq-title, .sce-seq-message, .sce-seq-hint, .sce-seq-step__label, .sce-seq-step__sub, .sce-seq-step__min, .sce-milestone"
-    );
-    for (var i = 0; i < colorTargets.length; i += 1) {
-      colorTargets[i].style.color = widgetTextColor;
     }
   }
 
@@ -857,28 +1010,25 @@
     });
   }
 
-  /** 2-step tier progress UI: discount -> free shipping. */
+  /** 2-step tier progress UI: premium bar + scalloped badges + captions aligned to badges. */
   var SEQUENTIAL_WIDGET_INNER =
     '<div class="sce-free-shipping-widget__title sce-seq-title"></div>' +
     '<div class="sce-free-shipping-widget__message sce-seq-message"></div>' +
-    // '<div class="sce-free-shipping-widget__bar sce-seq-main-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">' +
-    // '<div class="sce-free-shipping-widget__bar-fill sce-seq-main-bar-fill"></div>' +
-    // "</div>" +
-    '<div class="sce-seq-steps">' +
-    '<div class="sce-seq-step" data-tier-step="1">' +
-    '<div class="sce-seq-step__icon-wrap"><span class="sce-seq-step__dot"></span><span class="sce-seq-step__icon" aria-hidden="true">%</span></div>' +
-    '<div class="sce-seq-step__label"></div>' +
-    '<div class="sce-seq-step__sub"></div>' +
-    '<div class="sce-seq-step__min"></div>' +
+    '<div class="sce-seq-bar-stack">' +
+    '<div class="sce-free-shipping-widget__bar sce-seq-main-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">' +
+    '<div class="sce-free-shipping-widget__bar-fill sce-seq-main-bar-fill"></div>' +
+    '<div class="sce-seq-main-bar-point sce-seq-main-bar-point--tier1" aria-hidden="true"><span class="sce-seq-main-bar-point__icon">%</span></div>' +
+    '<div class="sce-seq-main-bar-point sce-seq-main-bar-point--tier2" aria-hidden="true"><span class="sce-seq-main-bar-point__icon">🚚</span></div>' +
     "</div>" +
-    '<div class="sce-seq-connector" aria-hidden="true">' +
-    '<div class="sce-seq-connector__track"><span class="sce-seq-connector__fill"></span></div>' +
+    '<div class="sce-seq-bar-caps">' +
+    '<div class="sce-seq-bar-cap sce-seq-bar-cap--1">' +
+    '<div class="sce-seq-bar-cap__label"></div>' +
+    '<div class="sce-seq-bar-cap__price"></div>' +
     "</div>" +
-    '<div class="sce-seq-step" data-tier-step="2">' +
-    '<div class="sce-seq-step__icon-wrap"><span class="sce-seq-step__dot"></span><span class="sce-seq-step__icon" aria-hidden="true">🚚</span></div>' +
-    '<div class="sce-seq-step__label"></div>' +
-    '<div class="sce-seq-step__sub"></div>' +
-    '<div class="sce-seq-step__min"></div>' +
+    '<div class="sce-seq-bar-cap sce-seq-bar-cap--2">' +
+    '<div class="sce-seq-bar-cap__label"></div>' +
+    '<div class="sce-seq-bar-cap__price"></div>' +
+    "</div>" +
     "</div>" +
     "</div>" +
     '<div class="sce-free-shipping-widget__hint sce-seq-hint"></div>';
@@ -891,8 +1041,73 @@
 
     var level = getSequentialLevelFromCart(cart);
     var subtotalCents = getCartSubtotalCents(cart);
-    var targets = getSequentialTargetsCents();
     var tierCount = getDisplayedSequentialTierCount();
+
+    if (dynamicTierMode && tierCount === 0) {
+      var rootEmpty = host.classList.contains("sce-free-shipping-widget")
+        ? host
+        : host.querySelector(".sce-free-shipping-widget");
+      if (!rootEmpty) {
+        rootEmpty = findInjectedWidgetRootInHostRegion(host);
+      }
+      if (!rootEmpty) {
+        rootEmpty = document.createElement("div");
+        rootEmpty.className = "sce-free-shipping-widget sce-free-shipping-widget--sequential";
+        rootEmpty.innerHTML = SEQUENTIAL_WIDGET_INNER;
+        rootEmpty.setAttribute("data-sce-scope", injectionScopeId);
+        rootEmpty.setAttribute("data-sce-injected", "1");
+      } else if (!rootEmpty.querySelector(".sce-seq-bar-stack")) {
+        rootEmpty.className = "sce-free-shipping-widget sce-free-shipping-widget--sequential";
+        rootEmpty.innerHTML = SEQUENTIAL_WIDGET_INNER;
+      }
+      rootEmpty.classList.add("sce-free-shipping-widget--sequential");
+      rootEmpty.classList.toggle("sce-free-shipping-widget--sequential-single", true);
+      rootEmpty.classList.toggle("sce-free-shipping-widget--no-active-tiers", true);
+      rootEmpty.setAttribute("data-unlock-key", unlockAttributeKey);
+      placeWidget(host, rootEmpty);
+      ensureWidgetCoreStyles(rootEmpty, true);
+      applyWidgetColors(rootEmpty);
+      rootEmpty.classList.toggle("sce-free-shipping-widget--sce-primary", !allowMultipleWidgetHosts);
+
+      var titleEmpty = rootEmpty.querySelector(".sce-seq-title");
+      var messageEmpty = rootEmpty.querySelector(".sce-seq-message");
+      var barStackEmpty = rootEmpty.querySelector(".sce-seq-bar-stack");
+      var hintEmpty = rootEmpty.querySelector(".sce-seq-hint");
+      if (titleEmpty) {
+        titleEmpty.textContent = sequentialTitle;
+        titleEmpty.style.display = showHeading ? "" : "none";
+        titleEmpty.style.color = headingColor;
+      }
+      if (messageEmpty) {
+        messageEmpty.textContent =
+          "Hey, please go to the app and create a tier discount there 😊 After that, it will automatically show up here.";
+        messageEmpty.style.display = showSubheading ? "" : "none";
+        messageEmpty.style.color = subheadingColor;
+      }
+      if (barStackEmpty) barStackEmpty.style.display = "none";
+      if (hintEmpty) {
+        hintEmpty.textContent = subtotalLabel + ": " + formatMoney(subtotalCents);
+        hintEmpty.style.display = showHint ? "" : "none";
+        hintEmpty.style.color = hintColor;
+      }
+      rootEmpty.setAttribute("data-seq-progress", "0");
+      if (dynamicTierMode) {
+        var btnsEmpty = rootEmpty.querySelectorAll(".sce-tier-unlock-btn");
+        for (var bi = 0; bi < btnsEmpty.length; bi += 1) {
+          btnsEmpty[bi].style.display = "none";
+        }
+      }
+      return;
+    }
+
+    var targets = getSequentialTargetsCents();
+    var tier1RatioPct =
+      tierCount > 1 && Number(targets.tier2Cents) > 0
+        ? Math.max(
+            0,
+            Math.min(100, Math.round((Number(targets.tier1Cents || 0) / Number(targets.tier2Cents)) * 100)),
+          )
+        : 100;
     var tier1Complete;
     var tier2Eligible;
     var tier2Complete;
@@ -901,12 +1116,24 @@
       tier1Complete = level >= 1 || subtotalCents >= targets.tier1Cents;
       tier2Eligible = false;
       tier2Complete = false;
-      progressPct = tier1Complete ? 100 : 0;
+      progressPct =
+        Number(targets.tier1Cents) > 0
+          ? Math.max(0, Math.min(100, Math.round((subtotalCents / Number(targets.tier1Cents)) * 100)))
+          : tier1Complete
+            ? 100
+            : 0;
     } else {
       tier1Complete = level >= 1 || subtotalCents >= targets.tier1Cents;
       tier2Eligible = tier1Complete;
       tier2Complete = tier2Eligible && (level >= 2 || subtotalCents >= targets.tier2Cents);
-      progressPct = tier2Complete ? 100 : tier1Complete ? 50 : 0;
+      progressPct =
+        Number(targets.tier2Cents) > 0
+          ? Math.max(0, Math.min(100, Math.round((subtotalCents / Number(targets.tier2Cents)) * 100)))
+          : tier2Complete
+            ? 100
+            : tier1Complete
+              ? tier1RatioPct
+              : 0;
     }
 
     var root = host.classList.contains("sce-free-shipping-widget")
@@ -921,12 +1148,13 @@
       root.innerHTML = SEQUENTIAL_WIDGET_INNER;
       root.setAttribute("data-sce-scope", injectionScopeId);
       root.setAttribute("data-sce-injected", "1");
-    } else if (!root.querySelector(".sce-seq-main-bar")) {
+    } else if (!root.querySelector(".sce-seq-bar-stack")) {
       root.className = "sce-free-shipping-widget sce-free-shipping-widget--sequential";
       root.innerHTML = SEQUENTIAL_WIDGET_INNER;
     }
 
     root.classList.add("sce-free-shipping-widget--sequential");
+    root.classList.remove("sce-free-shipping-widget--no-active-tiers");
     root.setAttribute("data-unlock-key", unlockAttributeKey);
     placeWidget(host, root);
     ensureWidgetCoreStyles(root, true);
@@ -937,44 +1165,60 @@
     var messageEl = root.querySelector(".sce-seq-message");
     var barFill = root.querySelector(".sce-seq-main-bar-fill");
     var mainBar = root.querySelector(".sce-seq-main-bar");
-    var tierStep1 = root.querySelector('[data-tier-step="1"]');
-    var tierStep2 = root.querySelector('[data-tier-step="2"]');
-    var stepsEl = root.querySelector(".sce-seq-steps");
-    var step1Label = tierStep1 ? tierStep1.querySelector(".sce-seq-step__label") : null;
-    var step2Label = tierStep2 ? tierStep2.querySelector(".sce-seq-step__label") : null;
-    var step1Sub = tierStep1 ? tierStep1.querySelector(".sce-seq-step__sub") : null;
-    var step2Sub = tierStep2 ? tierStep2.querySelector(".sce-seq-step__sub") : null;
-    var step1Icon = tierStep1 ? tierStep1.querySelector(".sce-seq-step__icon") : null;
-    var step1Min = tierStep1 ? tierStep1.querySelector(".sce-seq-step__min") : null;
-    var step2Min = tierStep2 ? tierStep2.querySelector(".sce-seq-step__min") : null;
-    if (tierStep1 && !step1Min) {
-      step1Min = document.createElement("div");
-      step1Min.className = "sce-seq-step__min";
-      tierStep1.appendChild(step1Min);
-    }
-    if (tierStep2 && !step2Min) {
-      step2Min = document.createElement("div");
-      step2Min.className = "sce-seq-step__min";
-      tierStep2.appendChild(step2Min);
-    }
-    var connFill = root.querySelector(".sce-seq-connector__fill");
-    if (stepsEl && tierCount > 1 && tierStep1 && tierStep2 && !root.querySelector(".sce-seq-connector")) {
-      var conn = document.createElement("div");
-      conn.className = "sce-seq-connector";
-      conn.setAttribute("aria-hidden", "true");
-      conn.innerHTML =
-        '<div class="sce-seq-connector__track"><span class="sce-seq-connector__fill"></span></div>';
-      tierStep2.parentNode.insertBefore(conn, tierStep2);
-      connFill = conn.querySelector(".sce-seq-connector__fill");
-    }
+    var barStack = root.querySelector(".sce-seq-bar-stack");
+    if (barStack) barStack.style.display = "";
+    var cap1 = root.querySelector(".sce-seq-bar-cap--1");
+    var cap2 = root.querySelector(".sce-seq-bar-cap--2");
+    var cap1Label = cap1 ? cap1.querySelector(".sce-seq-bar-cap__label") : null;
+    var cap1Price = cap1 ? cap1.querySelector(".sce-seq-bar-cap__price") : null;
+    var cap2Label = cap2 ? cap2.querySelector(".sce-seq-bar-cap__label") : null;
+    var cap2Price = cap2 ? cap2.querySelector(".sce-seq-bar-cap__price") : null;
     var hint = root.querySelector(".sce-seq-hint");
+    var mainBarPoint1 = root.querySelector(".sce-seq-main-bar-point--tier1");
+    var mainBarPoint2 = root.querySelector(".sce-seq-main-bar-point--tier2");
+    var mainBarPoint1Icon = mainBarPoint1
+      ? mainBarPoint1.querySelector(".sce-seq-main-bar-point__icon")
+      : null;
+    var mainBarPoint2Icon = mainBarPoint2
+      ? mainBarPoint2.querySelector(".sce-seq-main-bar-point__icon")
+      : null;
+
+    var bs = storefrontBarStyle();
+    var p1 = tier1Complete ? bs.tier1 && bs.tier1.after : bs.tier1 && bs.tier1.before;
+    var p2 = tier2Complete ? bs.tier2 && bs.tier2.after : bs.tier2 && bs.tier2.before;
+    p1 = p1 || {};
+    p2 = p2 || {};
+    var resolved = resolveSeqBarColors(bs, barFillColor, barTrackColor, tier1Complete, tier2Complete);
+    var badgeSize = Number(bs.badgeSizePx) > 0 ? Number(bs.badgeSizePx) : 46;
+    var barH = Number(bs.barHeightPx) > 0 ? Number(bs.barHeightPx) : 10;
+    var br = Number(bs.barBorderRadiusPx) >= 0 ? Number(bs.barBorderRadiusPx) : 999;
+    var transMs = Number(bs.transitionMs) >= 0 ? Number(bs.transitionMs) : 280;
+    var capGap = Number(bs.captionGapPx) >= 0 ? Number(bs.captionGapPx) : 8;
+    var mt = Number(bs.barSectionMarginTopPx) >= 0 ? Number(bs.barSectionMarginTopPx) : 30;
+    var mb = Number(bs.barSectionMarginBottomPx) >= 0 ? Number(bs.barSectionMarginBottomPx) : 6;
+    var hoverSc = Number(bs.badgeHoverScalePercent) >= 100 ? Number(bs.badgeHoverScalePercent) / 100 : 1.04;
+
+    var barInset = Math.ceil(badgeSize / 2) + 4;
+
+    root.style.setProperty("--sce-badge-hover-scale", String(hoverSc));
+    if (barStack && Number(bs.barMaxWidthPx) > 0) {
+      barStack.style.maxWidth = String(bs.barMaxWidthPx) + "px";
+      barStack.style.marginLeft = "auto";
+      barStack.style.marginRight = "auto";
+    } else if (barStack) {
+      barStack.style.maxWidth = "";
+      barStack.style.marginLeft = "";
+      barStack.style.marginRight = "";
+    }
 
     root.classList.toggle("sce-free-shipping-widget--sequential-single", tierCount === 1);
-    if (stepsEl) stepsEl.classList.toggle("sce-seq-steps--single", tierCount === 1);
-    if (tierStep2) {
-      var hideSecond = tierCount === 1;
-      tierStep2.style.display = hideSecond ? "none" : "";
-      tierStep2.setAttribute("aria-hidden", hideSecond ? "true" : "false");
+    var hideSecondTier = tierCount === 1;
+    if (cap2) {
+      cap2.style.display = hideSecondTier ? "none" : "";
+      cap2.setAttribute("aria-hidden", hideSecondTier ? "true" : "false");
+    }
+    if (mainBarPoint2) {
+      mainBarPoint2.style.display = showTierIcons && !hideSecondTier ? "" : "none";
     }
 
     if (titleEl) titleEl.textContent = sequentialTitle;
@@ -994,76 +1238,104 @@
       messageEl.style.color = subheadingColor;
     }
 
+    if (mainBar) {
+      mainBar.style.height = barH + "px";
+      mainBar.style.borderRadius = br >= 999 ? "999px" : br + "px";
+      mainBar.style.marginTop = mt + "px";
+      mainBar.style.marginBottom = (capGap + 4) + "px";
+      mainBar.style.marginLeft = barInset + "px";
+      mainBar.style.marginRight = barInset + "px";
+      mainBar.style.overflow = "visible";
+    }
+
     if (barFill) {
-      var visibleBar = progressPct > 0 ? Math.max(progressPct, 3) : 0;
+      var visibleBar = progressPct > 0 ? Math.max(progressPct, 2) : 0;
       barFill.style.width = visibleBar + "%";
       barFill.classList.toggle("is-active", progressPct > 0);
+      barFill.style.background = resolved.fill;
+      barFill.style.borderRadius = br >= 999 ? "999px" : br + "px";
+      barFill.style.transition = "width " + transMs + "ms cubic-bezier(0.4, 0, 0.2, 1), background " + transMs + "ms ease";
     }
     if (mainBar) mainBar.setAttribute("aria-valuenow", String(progressPct));
+    if (mainBar) {
+      mainBar.style.background = resolved.track;
+      mainBar.style.transition = "background " + transMs + "ms ease";
+    }
     root.setAttribute("data-seq-progress", String(progressPct));
-    if (connFill) {
-      connFill.style.width = tierCount > 1 ? String(progressPct) + "%" : "0%";
-      connFill.style.background = barFillColor;
-      if (connFill.parentNode && connFill.parentNode.style) {
-        connFill.parentNode.style.background = barTrackColor;
-      }
+
+    function applyPointStyle(el, phase) {
+      if (!el) return;
+      el.style.width = badgeSize + "px";
+      el.style.height = badgeSize + "px";
+      el.style.background = phase.badgeBackgroundColor || iconBackgroundColor;
+      el.style.color = phase.iconColor || iconTextColor;
+      el.style.border = "2px solid " + (phase.badgeBorderColor || "#000000");
+      el.style.boxShadow = phase.badgeShadow || "none";
+      el.style.outline = "none";
+      el.style.transition =
+        "background " + transMs + "ms ease, color " + transMs + "ms ease, box-shadow " + transMs + "ms ease, transform 0.2s ease";
     }
 
-    if (step1Label) step1Label.textContent = tier1LabelText || tier1Label;
-    if (step2Label) step2Label.textContent = tier2LabelText || tier2Label;
-    setStepSubText(step1Sub, tier1Label, tier1TagText);
-    setStepSubText(step2Sub, tier2Label, tier2TagText);
-    setStepMinAmount(step1Min, targets.tier1Cents);
-    setStepMinAmount(step2Min, tierCount > 1 ? targets.tier2Cents : NaN);
+    if (mainBarPoint1) {
+      mainBarPoint1.style.left = tierCount > 1 ? String(tier1RatioPct) + "%" : "100%";
+      mainBarPoint1.style.display = showTierIcons ? "" : "none";
+      applyPointStyle(mainBarPoint1, p1);
+      mainBarPoint1.classList.toggle("sce-seq-main-bar-point--locked", false);
+    }
+    if (mainBarPoint2) {
+      mainBarPoint2.style.left = "100%";
+      applyPointStyle(mainBarPoint2, p2);
+      mainBarPoint2.classList.toggle("sce-seq-main-bar-point--locked", !tier2Complete);
+    }
+    if (mainBarPoint1Icon) {
+      mainBarPoint1Icon.textContent = tierIconDisplay(tier1Icon, "%");
+      mainBarPoint1Icon.style.fontSize = (p1.iconSizePx || Math.max(12, Math.round(badgeSize * 0.33))) + "px";
+    }
+    if (mainBarPoint2Icon) {
+      mainBarPoint2Icon.textContent = tierIconDisplay(tier2Icon, "🚚");
+      mainBarPoint2Icon.style.fontSize = (p2.iconSizePx || Math.max(12, Math.round(badgeSize * 0.33))) + "px";
+    }
 
-    if (step1Icon) {
-      step1Icon.textContent = tier1Icon || "%";
+    var barCapsEl = root.querySelector(".sce-seq-bar-caps");
+    if (barCapsEl) {
+      barCapsEl.style.marginLeft = "10px";
+      barCapsEl.style.marginRight = "10px";
+      barCapsEl.style.marginTop = "20px";
+      barCapsEl.style.position = "relative";
     }
-    var step2Icon = tierStep2 ? tierStep2.querySelector(".sce-seq-step__icon") : null;
-    if (step2Icon) {
-      step2Icon.textContent = tier2Icon || "🚚";
+    if (cap1) {
+      cap1.style.left = tierCount > 1 ? String(tier1RatioPct) + "%" : "100%";
+      cap1.style.transform = "translateX(-50%)";
+      cap1.style.whiteSpace = "nowrap";
+      cap1.style.maxWidth = "";
     }
-
-    if (tierStep1) {
-      var step1IconWrap = tierStep1.querySelector(".sce-seq-step__icon-wrap");
-      if (step1IconWrap) step1IconWrap.style.display = showTierIcons ? "" : "none";
-      if (step1IconWrap) {
-        step1IconWrap.style.background = iconBackgroundColor;
-        step1IconWrap.style.color = iconTextColor;
-      }
-      if (step1Label) {
-        step1Label.style.display = showTierLabels && showTier1Heading ? "" : "none";
-        step1Label.style.color = tierHeadingColor;
-      }
-      if (step1Sub) {
-        step1Sub.style.display = showTierLabels && showTier1Subheading ? "" : "none";
-        step1Sub.style.color = tierSubheadingColor;
-      }
-      if (step1Min) step1Min.style.display = showTierMinimums ? "" : "none";
-      if (step1Min) step1Min.style.color = tierSubheadingColor;
-      tierStep1.classList.toggle("is-complete", tier1Complete);
-      tierStep1.classList.toggle("is-active", !tier1Complete);
+    if (cap2) {
+      cap2.style.left = "";
+      cap2.style.right = "0";
+      cap2.style.transform = "none";
+      cap2.style.textAlign = "right";
+      cap2.style.whiteSpace = "nowrap";
+      cap2.style.maxWidth = "";
     }
-    if (tierStep2) {
-      var step2IconWrap = tierStep2.querySelector(".sce-seq-step__icon-wrap");
-      if (step2IconWrap) step2IconWrap.style.display = showTierIcons ? "" : "none";
-      if (step2IconWrap) {
-        step2IconWrap.style.background = iconBackgroundColor;
-        step2IconWrap.style.color = iconTextColor;
-      }
-      if (step2Label) {
-        step2Label.style.display = showTierLabels && showTier2Heading ? "" : "none";
-        step2Label.style.color = tierHeadingColor;
-      }
-      if (step2Sub) {
-        step2Sub.style.display = showTierLabels && showTier2Subheading ? "" : "none";
-        step2Sub.style.color = tierSubheadingColor;
-      }
-      if (step2Min) step2Min.style.display = showTierMinimums ? "" : "none";
-      if (step2Min) step2Min.style.color = tierSubheadingColor;
-      tierStep2.classList.toggle("is-enabled", tier2Eligible);
-      tierStep2.classList.toggle("is-complete", tier2Complete);
-      tierStep2.classList.toggle("is-active", tier2Eligible && !tier2Complete);
+    if (cap1Label) {
+      cap1Label.textContent = tier1LabelText || tier1Label;
+      cap1Label.style.color = p1.labelColor || tierHeadingColor;
+      cap1Label.style.visibility = showTierLabels && showTier1Heading ? "visible" : "hidden";
+    }
+    if (cap1Price) {
+      setStepMinAmount(cap1Price, targets.tier1Cents);
+      cap1Price.style.color = p1.priceLabelColor || tierSubheadingColor;
+      cap1Price.style.visibility = showTierMinimums ? "visible" : "hidden";
+    }
+    if (cap2Label) {
+      cap2Label.textContent = tier2LabelText || tier2Label;
+      cap2Label.style.color = p2.labelColor || tierHeadingColor;
+      cap2Label.style.visibility = showTierLabels && showTier2Heading ? "visible" : "hidden";
+    }
+    if (cap2Price) {
+      setStepMinAmount(cap2Price, tierCount > 1 ? targets.tier2Cents : NaN);
+      cap2Price.style.color = p2.priceLabelColor || tierSubheadingColor;
+      cap2Price.style.visibility = showTierMinimums ? "visible" : "hidden";
     }
 
     if (hint) {
@@ -1180,11 +1452,15 @@ function ensureWidgetCoreStyles(root, isSequential) {
   var bar = root.querySelector(".sce-free-shipping-widget__bar");
   if (bar) {
     bar.style.display = "block";
-    bar.style.width = "100%";
-    bar.style.overflow = "hidden";
-    bar.style.borderRadius = "999px";
-    bar.style.height = isSequential ? "10px" : "8px";
-    if (!bar.style.background) bar.style.background = "#e5e7eb";
+    if (isSequential && bar.classList.contains("sce-seq-main-bar")) {
+      bar.style.overflow = "visible";
+    } else {
+      bar.style.width = "100%";
+      bar.style.overflow = "hidden";
+      bar.style.borderRadius = "999px";
+      bar.style.height = isSequential ? "10px" : "8px";
+      if (!bar.style.background) bar.style.background = "#e5e7eb";
+    }
   }
 
   var fill = root.querySelector(
@@ -1200,10 +1476,11 @@ function ensureWidgetCoreStyles(root, isSequential) {
   }
 
   if (isSequential) {
-    var steps = root.querySelector(".sce-seq-steps");
-    if (steps) {
-      steps.style.display = "flex";
-      steps.style.alignItems = "stretch";
+    var stack = root.querySelector(".sce-seq-bar-stack");
+    if (stack) {
+      stack.style.display = "block";
+      stack.style.position = "relative";
+      stack.style.width = "100%";
     }
   }
 }
@@ -1298,42 +1575,6 @@ function ensureWidgetCoreStyles(root, isSequential) {
     }
   }
 
-  function renderCartName(host) {
-    if (!host || !cartNameText) return;
-
-    var header = host.querySelector(".sce-cart-user-name");
-    if (!header) {
-      header = document.createElement("div");
-      header.className = "sce-cart-user-name";
-
-      var heading = host.querySelector("h1, h2, h3, .drawer__heading, .cart__heading");
-      if (heading && heading.parentNode === host) {
-        heading.insertAdjacentElement("afterend", header);
-      } else {
-        host.prepend(header);
-      }
-    }
-
-    header.textContent = cartNameText;
-  }
-
-  function renderNameInCartHeadings() {
-    if (!cartNameText) return;
-
-    var headings = document.querySelectorAll("h1, h2, h3, .drawer__heading, .cart__heading");
-    headings.forEach(function (heading) {
-      var text = (heading.textContent || "").trim();
-      if (!/your cart|cart/i.test(text)) return;
-
-      var inline = heading.querySelector(".sce-cart-user-name-inline");
-      if (!inline) {
-        inline = document.createElement("span");
-        inline.className = "sce-cart-user-name-inline";
-        heading.appendChild(inline);
-      }
-      inline.textContent = " - " + cartNameText;
-    });
-  }
 
   function fetchCart() {
     return fetch("/cart.js", { credentials: "same-origin" }).then(function (r) {
@@ -1369,7 +1610,44 @@ function ensureWidgetCoreStyles(root, isSequential) {
     }, 400);
   }
 
+  /** With pinned Shipping Progress block: also mount in cart page + cart drawer by default. */
+  function getDefaultCartPageHostForPinned() {
+    if (!/\/cart($|\?)/i.test(window.location.pathname || "")) return null;
+    return (
+      document.querySelector("form[action*='/cart']") ||
+      document.querySelector(".cart__blocks") ||
+      document.querySelector(".cart__contents") ||
+      document.querySelector(".template-cart .cart") ||
+      null
+    );
+  }
+
+  function getDefaultCartDrawerHostForPinned() {
+    var inner = document.querySelector(
+      "cart-drawer .drawer__inner, .cart-drawer .drawer__inner, [id*='CartDrawer'] .drawer__inner, #CartDrawer .drawer__inner",
+    );
+    if (inner) return inner;
+    return (
+      document.querySelector("cart-drawer, [id*='CartDrawer'], #CartDrawer, .cart-drawer") || null
+    );
+  }
+
   function getHosts() {
+    if (pinnedMountSelector) {
+      var combined = [];
+      try {
+        var pinEl = document.querySelector(pinnedMountSelector);
+        if (pinEl) combined.push(pinEl);
+      } catch (_) {
+        /* invalid selector */
+      }
+      var cartPageHost = getDefaultCartPageHostForPinned();
+      if (cartPageHost) combined.push(cartPageHost);
+      var drawerHost = getDefaultCartDrawerHostForPinned();
+      if (drawerHost) combined.push(drawerHost);
+      combined = uniqueElements(combined);
+      return keepDeepestHosts(combined);
+    }
     var hosts = [];
     selectorTargets.forEach(function (selector) {
       document.querySelectorAll(selector).forEach(function (el) {
@@ -1442,7 +1720,7 @@ function ensureWidgetCoreStyles(root, isSequential) {
 
   function isCartRelatedElement(el) {
     if (!(el instanceof Element)) return false;
-    if (el.closest(".sce-free-shipping-widget, .sce-cart-user-name, .sce-cart-user-name-inline")) return false;
+    if (el.closest(".sce-free-shipping-widget")) return false;
 
     // If merchant adds configured target classes/sections dynamically, refresh immediately.
     if (elementTouchesAnyTarget(el, selectorTargets)) return true;
@@ -1458,12 +1736,35 @@ function ensureWidgetCoreStyles(root, isSequential) {
     return combined.indexOf("cart") !== -1;
   }
 
+  function renderAllHostsWithCart(cart) {
+    if (!cart) return;
+    if (selectorTargets.length === 0) return;
+    var prevApplying = isApplyingChanges;
+    isApplyingChanges = true;
+    try {
+      var hosts = preferSceBlockHosts(getHosts());
+      if (!allowMultipleWidgetHosts) {
+        hosts = dedupeWidgetHostsAcrossThemes(hosts);
+        hosts = pickSingleWidgetHost(hosts);
+      }
+      if (hosts && hosts.length) {
+        removeOrphanInjectedWidgets(hosts);
+        dedupeInjectedWidgetsInOpenCart();
+        hosts.forEach(function (host) {
+          if (sequentialMode) {
+            renderSequentialWidget(host, cart);
+          } else {
+            renderWidget(host, cart);
+          }
+        });
+      }
+    } finally {
+      isApplyingChanges = prevApplying;
+    }
+  }
+
   function update() {
     isApplyingChanges = true;
-    renderNameInCartHeadings();
-    keepDeepestHosts(getNameHosts()).forEach(function (host) {
-      renderCartName(host);
-    });
     isApplyingChanges = false;
 
     var needWidget = selectorTargets.length > 0;
@@ -1471,28 +1772,14 @@ function ensureWidgetCoreStyles(root, isSequential) {
 
     if (!needWidget && !needLog) return;
 
+    if (lastKnownCart && needWidget) {
+      renderAllHostsWithCart(lastKnownCart);
+    }
+
     fetchCart()
       .then(function (cart) {
+        lastKnownCart = cart;
         if (needLog) postCartAccessLog(cart);
-        var runRender = function () {
-          if (!needWidget) return;
-          var hosts = keepDeepestHosts(getHosts());
-          if (!allowMultipleWidgetHosts) {
-            hosts = dedupeWidgetHostsAcrossThemes(hosts);
-          }
-          if (!allowMultipleWidgetHosts) {
-            hosts = pickSingleWidgetHost(hosts);
-          }
-          removeOrphanInjectedWidgets(hosts);
-          dedupeInjectedWidgetsInOpenCart();
-          hosts.forEach(function (host) {
-            if (sequentialMode) {
-              renderSequentialWidget(host, cart);
-            } else {
-              renderWidget(host, cart);
-            }
-          });
-        };
 
         if (dynamicTierMode) {
           var subtotal = getCartSubtotalCents(cart);
@@ -1502,18 +1789,22 @@ function ensureWidgetCoreStyles(root, isSequential) {
           var shouldSyncDynamic =
             cartSig !== lastDynamicCartSig || now - lastDynamicSyncAt > 10000;
           if (!shouldSyncDynamic) {
-            runRender();
+            renderAllHostsWithCart(cart);
             return;
           }
           lastDynamicCartSig = cartSig;
           lastDynamicSyncAt = now;
-          refreshDynamicTiersWithCart(cart).then(runRender);
+          refreshDynamicTiersWithCart(cart).then(function () {
+            renderAllHostsWithCart(cart);
+          });
         } else {
-          runRender();
+          renderAllHostsWithCart(cart);
         }
       })
       .catch(function () {
-        /* ignore cart fetch failures */
+        if (lastKnownCart && needWidget) {
+          renderAllHostsWithCart(lastKnownCart);
+        }
       });
   }
 
@@ -1546,6 +1837,34 @@ function ensureWidgetCoreStyles(root, isSequential) {
     if (isApplyingChanges) return;
 
     var now = Date.now();
+
+    var widgetWasRemoved = false;
+    if (lastKnownCart) {
+      for (var mi = 0; mi < mutations.length; mi++) {
+        var mut = mutations[mi];
+        for (var ri = 0; ri < mut.removedNodes.length; ri++) {
+          var removed = mut.removedNodes[ri];
+          if (!(removed instanceof Element)) continue;
+          try {
+            if (
+              removed.matches('[data-sce-scope="' + injectionScopeId + '"]') ||
+              removed.querySelector('[data-sce-scope="' + injectionScopeId + '"]')
+            ) {
+              widgetWasRemoved = true;
+              break;
+            }
+          } catch (_) {}
+        }
+        if (widgetWasRemoved) break;
+      }
+    }
+
+    if (widgetWasRemoved) {
+      renderAllHostsWithCart(lastKnownCart);
+      debouncedUpdate();
+      return;
+    }
+
     if (now - lastUpdateAt < 500) return;
 
     var shouldUpdate = mutations.some(function (mutation) {

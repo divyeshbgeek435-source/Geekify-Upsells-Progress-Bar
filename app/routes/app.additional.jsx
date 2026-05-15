@@ -419,7 +419,7 @@
 //           <s-paragraph>
 //             <s-text tone="subdued">
 //               One Section ID identifies this whole marquee; all lines below belong to it. In the
-//               theme editor, paste this same value into the Additional UI bar block — the storefront
+//               theme editor, paste this same value into the Additional UI bar block - the storefront
 //               bar only appears after that field is filled and matches this ID.
 //             </s-text>
 //           </s-paragraph>
@@ -1401,11 +1401,13 @@
  *  - White background, refined light-mode design
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Form,
   useActionData,
   useLoaderData,
+  useLocation,
+  useNavigate,
   useOutletContext,
   useNavigation,
   useSubmit,
@@ -1413,12 +1415,12 @@ import {
 import {
   defaultAdditionalConfig,
   generateSectionId,
-  parseAdditionalConfig,
-  resolveSectionId,
 } from "../lib/additional-ui-config.js";
-import { buildAdditionalTemplate } from "../lib/additional-ui-template.js";
 import { authenticate } from "../shopify.server";
-import prisma from "../db.server";
+import {
+  loadAnnouncementBodyAdminBlocks,
+  handleAnnouncementBodyAdminAction,
+} from "../lib/announcements-admin.server.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -1536,230 +1538,54 @@ function normalizeHexColor(value, fallback) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Loader — fetch all additional-UI bars for the authenticated shop
+// Loader - fetch all additional-UI bars for the authenticated shop
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
-
-  let rows = [];
-  try {
-    rows = await prisma.announcementBody.findMany({
-      where: { shop },
-      orderBy: { updatedAt: "desc" },
-      select: {
-        id: true,
-        sectionId: true,
-        bodyJson: true,
-        templateJson: true,
-        updatedAt: true,
-      },
-    });
-  } catch (error) {
-    const message = String(error?.message || "");
-    if (!message.includes("Unknown field `templateJson`")) throw error;
-    rows = await prisma.announcementBody.findMany({
-      where: { shop },
-      orderBy: { updatedAt: "desc" },
-      select: { id: true, sectionId: true, bodyJson: true, updatedAt: true },
-    });
-  }
-
-  const blocks = rows.map((row) => {
-    const parsed = parseAdditionalConfig(row.bodyJson);
-    return {
-      rowId: row.id,
-      config: {
-        ...parsed,
-        sectionId: resolveSectionId(
-          { ...parsed, sectionId: row.sectionId || parsed.sectionId },
-          row.id,
-        ),
-      },
-      updatedAt: row.updatedAt.toISOString(),
-      templateJson: row.templateJson ?? "{}",
-    };
-  });
-
-  return { blocks };
+  const url = new URL(request.url);
+  const blocks = await loadAnnouncementBodyAdminBlocks(shop);
+  const bodyEditId = url.searchParams.get("kind") === "body" ? url.searchParams.get("edit") || "" : "";
+  const pendingBodyCreate =
+    url.searchParams.get("kind") === "body" && url.searchParams.get("create") === "1";
+  return { blocks, bodyEditId, pendingBodyCreate };
 };
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Action — handle save / delete mutations
-// ─────────────────────────────────────────────────────────────────────────────
 
 export const action = async ({ request }) => {
   const { session } = await authenticate.admin(request);
-  const shop = session.shop;
   const form = await request.formData();
-  const intent = String(form.get("intent") || "");
-
-  // ── Delete ────────────────────────────────────────────────────────────────
-  if (intent === "delete") {
-    const rowId = String(form.get("rowId") || "").trim();
-    if (!rowId) return { ok: false, error: "Missing row id." };
-
-    await prisma.announcementBody.deleteMany({
-      where: { id: rowId, shop },
-    });
-    return { ok: true, intent: "delete" };
-  }
-
-  if (intent !== "save") {
-    return { ok: false, error: "Unknown action." };
-  }
-
-  // ── Save ──────────────────────────────────────────────────────────────────
-
-  // Parse messages from JSON-encoded hidden field
-  let messagesPosted = [];
-  try {
-    messagesPosted = JSON.parse(String(form.get("messagesJson") || "[]"));
-  } catch {
-    messagesPosted = [];
-  }
-  if (!Array.isArray(messagesPosted)) messagesPosted = [];
-
-  // Build and validate the config object
-  const config = parseAdditionalConfig(
-    JSON.stringify({
-      sectionId: String(form.get("sectionId") || "").trim(),
-      displayMode: String(form.get("displayMode") || "stack"),
-      rotateIntervalMs: Number(form.get("rotateIntervalMs") || 3000),
-      rotateDirection: String(form.get("rotateDirection") || "forward"),
-      rotateAutoplay: form.get("rotateAutoplay") !== "false",
-      rotatePauseOnHover: form.get("rotatePauseOnHover") !== "false",
-      marqueeDurationSeconds: Number(form.get("marqueeDurationSeconds") || 18),
-      marqueeDirection: String(form.get("marqueeDirection") || "rtl"),
-      marqueeSeparator: String(form.get("marqueeSeparator") || "•"),
-      marqueeSeparatorRepeat: Number(form.get("marqueeSeparatorRepeat") || 1),
-      marqueeTrailingSeparator: form.get("marqueeTrailingSeparator") !== "false",
-      marqueeFullWidth: form.get("marqueeFullWidth") !== "false",
-      gapPx: Number(form.get("gapPx") || 24),
-      fontSizePx: Number(form.get("fontSizePx") || 22),
-      paddingYpx: Number(form.get("paddingYpx") || 14),
-      paddingXpx: Number(form.get("paddingXpx") || 16),
-      backgroundColor: String(form.get("backgroundColor") || "#b8f441"),
-      textColor: String(form.get("textColor") || "#0f172a"),
-      messages: messagesPosted,
-      policyContentSafe: form.get("policyContentSafe") !== "false",
-      policyNoFalseClaims: form.get("policyNoFalseClaims") !== "false",
-      policyAccessibilityReady: form.get("policyAccessibilityReady") !== "false",
-      comments: String(form.get("comments") || "").trim(),
-    }),
-  );
-
-  // Guard against duplicate sectionIds within the same shop
-  const rowId = String(form.get("rowId") || "").trim();
-  const conflicts = await prisma.announcementBody.findMany({
-    where: { shop },
-    select: { id: true, sectionId: true, bodyJson: true },
-  });
-  const hasDuplicateId = conflicts.some((entry) => {
-    if (rowId && entry.id === rowId) return false; // skip self on edit
-    const parsed = parseAdditionalConfig(entry.bodyJson);
-    const existingSectionId = resolveSectionId(
-      { ...parsed, sectionId: entry.sectionId || parsed.sectionId },
-      entry.id,
-    );
-    return existingSectionId === config.sectionId;
-  });
-  if (hasDuplicateId) {
-    return { ok: false, error: "Block ID already exists. Use a unique 12-character ID." };
-  }
-
-  const bodyJson = JSON.stringify(config);
-  const templatePayload = buildAdditionalTemplate({
-    name: `Additional UI ${config.sectionId}`,
-    sectionId: config.sectionId,
-    bodyJson,
-    templateJson: String(form.get("templateJson") || ""),
-  });
-
-  // Update existing row
-  if (rowId) {
-    let updated;
-    try {
-      updated = await prisma.announcementBody.update({
-        where: { id: rowId },
-        data: {
-          name: `Additional UI ${config.sectionId}`,
-          sectionId: config.sectionId,
-          bodyJson,
-          templateJson: JSON.stringify(templatePayload),
-          active: false,
-        },
-        select: { id: true, updatedAt: true },
-      });
-    } catch (error) {
-      const message = String(error?.message || "");
-      if (!message.includes("Unknown argument `templateJson`")) throw error;
-      updated = await prisma.announcementBody.update({
-        where: { id: rowId },
-        data: {
-          name: `Additional UI ${config.sectionId}`,
-          sectionId: config.sectionId,
-          bodyJson,
-          active: false,
-        },
-        select: { id: true, updatedAt: true },
-      });
-    }
-    return {
-      ok: true,
-      intent: "save",
-      savedId: updated.id,
-      savedAt: updated.updatedAt.toISOString(),
-    };
-  }
-
-  // Create new row
-  let created;
-  try {
-    created = await prisma.announcementBody.create({
-      data: {
-        shop,
-        name: `Additional UI ${config.sectionId}`,
-        sectionId: config.sectionId,
-        bodyJson,
-        templateJson: JSON.stringify(templatePayload),
-        active: false,
-      },
-      select: { id: true, updatedAt: true },
-    });
-  } catch (error) {
-    const message = String(error?.message || "");
-    if (!message.includes("Unknown argument `templateJson`")) throw error;
-    created = await prisma.announcementBody.create({
-      data: {
-        shop,
-        name: `Additional UI ${config.sectionId}`,
-        sectionId: config.sectionId,
-        bodyJson,
-        active: false,
-      },
-      select: { id: true, updatedAt: true },
-    });
-  }
-  return {
-    ok: true,
-    intent: "save",
-    savedId: created.id,
-    savedAt: created.updatedAt.toISOString(),
-  };
+  return handleAnnouncementBodyAdminAction(session.shop, form);
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Page component
-// ─────────────────────────────────────────────────────────────────────────────
-
-export default function AdditionalPage() {
-  const { blocks } = useLoaderData();
+export function AnnouncementBodyAdmin({
+  loaderData,
+  showTable = true,
+  routePrefix = "/app/additional",
+  navigateQueryStyle = "standalone",
+}) {
+  const { blocks, bodyEditId = "", pendingBodyCreate = false } = loaderData;
   const actionData = useActionData();
   const navigation = useNavigation();
   const submit = useSubmit();
+  const navigate = useNavigate();
+  const location = useLocation();
   const { onboarding } = useOutletContext() || {};
+
+  const withShopifyParams = useCallback(
+    (path) => {
+      const [pathname, existingQuery = ""] = path.split("?");
+      const current = new URLSearchParams(location.search);
+      const keep = new URLSearchParams(existingQuery);
+      for (const key of ["host", "shop"]) {
+        const val = current.get(key);
+        if (val && !keep.has(key)) keep.set(key, val);
+      }
+      const qs = keep.toString();
+      return qs ? `${pathname}?${qs}` : pathname;
+    },
+    [location.search],
+  );
 
   // ── Local UI state ─────────────────────────────────────────────────────────
   const [isEditorOpen, setIsEditorOpen] = useState(false);
@@ -1975,7 +1801,10 @@ export default function AdditionalPage() {
 
   const confirmDelete = () => {
     if (!deleteTarget?.rowId) return;
-    submit({ intent: "delete", rowId: deleteTarget.rowId }, { method: "post" });
+    submit(
+      { intent: "delete", rowId: deleteTarget.rowId, recordKind: "body" },
+      { method: "post" },
+    );
     setDeleteTarget(null);
   };
 
@@ -2000,10 +1829,41 @@ export default function AdditionalPage() {
       return { ...prev, messages: next.length ? next : [""] };
     });
 
+  const lastBodyUrlOpenRef = useRef("");
+  useEffect(() => {
+    if (!bodyEditId) lastBodyUrlOpenRef.current = "";
+  }, [bodyEditId]);
+
+  useEffect(() => {
+    if (navigateQueryStyle !== "unified" || !bodyEditId || !blocks.length) return;
+    if (lastBodyUrlOpenRef.current === bodyEditId) return;
+    const row = blocks.find((b) => b.rowId === bodyEditId);
+    if (!row) return;
+    lastBodyUrlOpenRef.current = bodyEditId;
+    setEditingRowId(row.rowId);
+    setEditor(buildEditorState(row.config));
+    setEditorStep("tabs");
+    setEditorTab("content");
+    setIsEditorOpen(true);
+  }, [bodyEditId, blocks, navigateQueryStyle]);
+
+  useEffect(() => {
+    if (!pendingBodyCreate || navigateQueryStyle !== "unified") return;
+    const cfg = buildEditorState(defaultAdditionalConfig());
+    setEditingRowId("");
+    setEditor({ ...cfg, sectionId: generateSectionId() });
+    setEditorStep("template");
+    setEditorTab("content");
+    setIsEditorOpen(true);
+    navigate(withShopifyParams(`${routePrefix}?kind=body`), { replace: true });
+  }, [pendingBodyCreate, navigateQueryStyle, navigate, routePrefix, withShopifyParams]);
+
   // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
-    <s-page heading="Additional UI Blocks">
+    <>
+    {showTable ? (
+    <s-page heading="Geekify: Upsells, Progress Bar">
       <s-stack direction="block" gap="base">
 
         {/* ── Missing API key warning ─────────────────────────────────────── */}
@@ -2086,7 +1946,7 @@ export default function AdditionalPage() {
                   pagedRows.map((row) => (
                     <tr key={row.rowId}>
 
-                      {/* Block ID — monospace, highlighted */}
+                      {/* Block ID - monospace, highlighted */}
                       <td>
                         <span className="sce-mono-id">{row.cfg.sectionId}</span>
                       </td>
@@ -2122,14 +1982,14 @@ export default function AdditionalPage() {
 
 
 
-                      {/* Internal comments — truncated, full text on hover */}
+                      {/* Internal comments - truncated, full text on hover */}
                       <td title={row.cfg.comments || ""} className="sce-td-comment">
                         {row.commentsShort
                           ? <>
                             {row.commentsShort}
                             {row.cfg.comments.length > 72 ? "…" : ""}
                           </>
-                          : <span className="sce-td-empty">—</span>}
+                          : <span className="sce-td-empty">-</span>}
                       </td>
 
                       {/* ISO timestamp */}
@@ -2233,7 +2093,7 @@ export default function AdditionalPage() {
               globally unique per shop. They map to <code>sectionId</code> in your Liquid theme.
             </li>
             <li>
-              <strong>Storefront polling</strong> — saved configs propagate within ~30 s. Avoid
+              <strong>Storefront polling</strong> - saved configs propagate within ~30 s. Avoid
               last-second edits before time-sensitive campaigns.
             </li>
             <li>
@@ -2245,7 +2105,7 @@ export default function AdditionalPage() {
               after the next poll cycle.
             </li>
             <li>
-              <strong>Policies</strong> — all three checkboxes should be confirmed before a block
+              <strong>Policies</strong> - all three checkboxes should be confirmed before a block
               goes live. Unchecked items display a "Needs review" badge in the table.
             </li>
             <li>
@@ -2255,6 +2115,8 @@ export default function AdditionalPage() {
           </ul>
         </div> */}
       </s-stack>
+    </s-page>
+    ) : null}
 
       {/* ── Editor modal ─────────────────────────────────────────────────────── */}
       {isEditorOpen && (
@@ -2277,13 +2139,13 @@ export default function AdditionalPage() {
                   </span>
                   {/* <span className="sce-modal-subtitle">
                     {editingRowId
-                      ? "Modify configuration — changes deploy on next poll cycle"
+                      ? "Modify configuration - changes deploy on next poll cycle"
                       : `Configure a new announcement bar Bloack id : <b>${editor.sectionId}</b>`}  
                   </span> */}
 
                   <span className="sce-modal-subtitle">
                     {editingRowId ? (
-                      "Modify configuration — changes deploy on next poll cycle"
+                      "Modify configuration - changes deploy on next poll cycle"
                     ) : (
                       <>
                         Configure a new announcement bar Block id :{" "}
@@ -2552,6 +2414,7 @@ export default function AdditionalPage() {
 
               {/* ── Hidden form + submit ───────────────────────────────────── */}
               <Form method="post">
+                <input type="hidden" name="recordKind" value="body" />
                 {/* Core identifiers */}
                 <input type="hidden" name="intent" value="save" />
                 <input type="hidden" name="rowId" value={editingRowId} />
@@ -2621,7 +2484,7 @@ export default function AdditionalPage() {
                         className="sce-btn sce-btn-primary"
                         disabled={isSaving || editor.sectionId.length !== 12}
                       >
-                        {isSaving ? "Saving…" : editingRowId ? "Update" : "Create"}
+                        {isSaving ? "Saving…" : editingRowId ? "Update" : "Save"}
                       </button>
                     ) : null}
                   </div>
@@ -3114,7 +2977,7 @@ export default function AdditionalPage() {
           color: rgb(0 123 96);
         }
 
-        /* Modal body padding — s-stack children get their own gap */
+        /* Modal body padding - s-stack children get their own gap */
         .sce-modal > s-stack {
           padding: 24px 28px 0;
           display: grid;
@@ -3345,15 +3208,14 @@ export default function AdditionalPage() {
           padding: 10px 12px;
           font-size: 13px;
           font-family: inherit;
-          line-height: 1.5;
-          color: var(--sce-ink);
+          line-height: 1.5; 
           background: var(--sce-surface);
           resize: vertical;
           outline: none;
           transition: border-color 0.14s, box-shadow 0.14s;
         }
         .sce-comments-input:focus {
-          border-color: var(--sce-border-focus);
+          // border-color: var(--sce-border-focus);
           box-shadow: 0 0 0 3px rgba(110,231,183,0.2);
         }
         .sce-comments-input::placeholder { color: var(--sce-ink-4); }
@@ -3521,6 +3383,18 @@ export default function AdditionalPage() {
           word-break: break-word;
         }
       `}</style>
-    </s-page>
+    </>
+  );
+}
+
+export default function AdditionalPage() {
+  const data = useLoaderData();
+  return (
+    <AnnouncementBodyAdmin
+      loaderData={data}
+      showTable
+      routePrefix="/app/additional"
+      navigateQueryStyle="standalone"
+    />
   );
 }

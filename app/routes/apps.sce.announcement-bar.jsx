@@ -4,6 +4,30 @@ import {
   resolveSectionHtmlIdFromHeader,
   templateRenderPayload,
 } from "../lib/announcement-header-template.js";
+import { announcementSectionHtmlIdsMatch } from "../lib/announcement-section-html-id.js";
+
+function normalizeProxyShop(raw) {
+  return String(raw ?? "").trim();
+}
+
+/** Shopify session shop + DB row occasionally differ only by case; SQLite compares exact strings. */
+function shopVariantsForLookup(shop) {
+  const s = normalizeProxyShop(shop);
+  if (!s) return [];
+  const lower = s.toLowerCase();
+  return [...new Set([s, lower])];
+}
+
+function normalizeIncomingSectionId(raw) {
+  let s = String(raw ?? "").trim();
+  try {
+    if (s.includes("%")) s = decodeURIComponent(s);
+  } catch {
+    /* ignore */
+  }
+  s = s.replace(/[\u200B-\u200D\uFEFF]/g, "").trim();
+  return s;
+}
 
 /**
  * App proxy: GET https://{shop}/apps/sce/announcement-bar?sectionId={sectionId}
@@ -11,10 +35,33 @@ import {
  * Requires [app_proxy] in shopify.app.toml (subpath sce).
  */
 export const loader = async ({ request }) => {
-  const { session } = await authenticate.public.appProxy(request);
+  let session;
+  try {
+    const ctx = await authenticate.public.appProxy(request);
+    session = ctx.session;
+  } catch (thrown) {
+    /** Shopify auth throws `Response` with empty body when HMAC fails - browsers then see "empty body". */
+    if (thrown instanceof Response) {
+      const st = thrown.status;
+      if (st === 400 || st === 401) {
+        return Response.json(
+          {
+            ok: false,
+            error: "app_proxy_auth_failed",
+            hint:
+              "Shopify could not verify this app-proxy request (missing or invalid signature). Load the storefront from your shop domain so requests go through Shopify - do not open this URL on the app tunnel host. Run shopify app dev for local dev; in Partners → App setup → App proxy, confirm proxy URL, prefix apps, subpath sce, and API secret match this app.",
+          },
+          { status: st },
+        );
+      }
+      return thrown;
+    }
+    throw thrown;
+  }
+
   const url = new URL(request.url);
-  const shop = (session?.shop || url.searchParams.get("shop") || "").trim();
-  const sectionId = (url.searchParams.get("sectionId") || "").trim();
+  const shop = normalizeProxyShop(session?.shop || url.searchParams.get("shop") || "");
+  const sectionId = normalizeIncomingSectionId(url.searchParams.get("sectionId"));
 
   if (!shop) {
     return Response.json({ ok: false, error: "missing_shop" }, { status: 400 });
@@ -33,16 +80,23 @@ export const loader = async ({ request }) => {
     );
   }
 
+  const shops = shopVariantsForLookup(shop);
   const bars = await prisma.announcementHeader.findMany({
-    where: { shop },
+    where: { shop: { in: shops } },
     orderBy: { updatedAt: "desc" },
   });
   for (const candidate of bars) {
     const candidateSectionId = resolveSectionHtmlIdFromHeader(candidate);
-    if (candidateSectionId === sectionId) {
+    if (announcementSectionHtmlIdsMatch(candidateSectionId, sectionId)) {
       bar = candidate;
       break;
     }
+  }
+
+  if (!bar) {
+    bar = await prisma.announcementHeader.findFirst({
+      where: { shop: { in: shops }, id: sectionId },
+    });
   }
 
   if (!bar) {
@@ -50,7 +104,8 @@ export const loader = async ({ request }) => {
       {
         ok: false,
         error: "not_found",
-        hint: "Check the Section ID matches an announcement in the app.",
+        hint:
+          "No announcement matches this Section ID for this shop. Copy the exact Section ID from Announcement Bars in the app (or paste the bar's database ID). Check for extra spaces or theme preview using a different shop.",
       },
       { status: 404 },
     );

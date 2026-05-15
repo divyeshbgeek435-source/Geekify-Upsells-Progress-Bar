@@ -21,16 +21,17 @@ api_version = "2026-04"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "write_cart_transforms,write_metaobject_definitions,write_metaobjects,write_products,read_discounts,write_discounts,read_price_rules,write_price_rules,read_shipping,write_shipping,read_customers,write_customers"
+scopes = "write_app_proxy,write_cart_transforms,write_metaobject_definitions,write_metaobjects,write_products,read_discounts,write_discounts,read_price_rules,write_price_rules,read_shipping,write_shipping,read_customers,write_customers"
 
 [auth]
 redirect_urls = [ "https://example.com/api/auth" ]
 
+# Storefront /apps/sce/<path> forwards to <application_url>/apps/sce/<path> when url is relative.
+# See https://shopify.dev/docs/apps/build/online-store/display-dynamic-data
 [app_proxy]
-url = "https://example.com"
-subpath_prefix = "apps"
-subpath = "sce"
+url = "/apps/sce"
 prefix = "apps"
+subpath = "sce"
 
 [product.metafields.app.demo_info]
 type = "single_line_text_field"

@@ -13,3 +13,15 @@ export function normalizeAnnouncementSectionHtmlId(raw) {
   if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(s)) return null;
   return s;
 }
+
+/** Theme + app copies may differ only by case; compare leniently. */
+export function announcementSectionHtmlIdsMatch(a, b) {
+  const x = String(a ?? "").trim();
+  const y = String(b ?? "").trim();
+  if (!x || !y) return false;
+  if (x.toLowerCase() === y.toLowerCase()) return true;
+  const nx = normalizeAnnouncementSectionHtmlId(x);
+  const ny = normalizeAnnouncementSectionHtmlId(y);
+  if (nx && ny && nx.toLowerCase() === ny.toLowerCase()) return true;
+  return false;
+}

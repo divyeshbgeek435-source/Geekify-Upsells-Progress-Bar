@@ -1,9 +1,10 @@
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
+import { mergeProgressBarDesign } from "../lib/progress-bar-design.js";
 
 const lastPingLogAtByShop = new Map();
 
-/** Same list as storefront free-shipping-progress.js — minSubtotal in DB is major units; cart uses minor units. */
+/** Same list as storefront free-shipping-progress.js - minSubtotal in DB is major units; cart uses minor units. */
 const ZERO_DECIMAL_CURRENCIES = new Set([
   "BIF",
   "CLP",
@@ -57,12 +58,8 @@ function resolveDiscountStatus(discount, now = new Date()) {
   if (!discount) return "INACTIVE";
   const start = parseDateInput(discount.scheduleStartAt);
   const end = parseDateInput(discount.scheduleEndAt);
-  const hasSchedule = Boolean(start || end);
-  if (hasSchedule) {
-    if (end && now > end) return "EXPIRED";
-    if (start && now < start) return "SCHEDULED";
-    return "ACTIVE";
-  }
+  if (end && now > end) return "EXPIRED";
+  if (start && now < start) return "SCHEDULED";
   if (discount.active === false) return "INACTIVE";
   return "ACTIVE";
 }
@@ -82,6 +79,22 @@ function isMissingTableError(error, tableName) {
       message.includes(t) &&
       message.includes("does not exist"))
   );
+}
+
+async function deactivateExpiredTierDiscountsForShop(shop) {
+  if (typeof prisma.tierDiscount?.updateMany !== "function") return;
+  try {
+    await prisma.tierDiscount.updateMany({
+      where: {
+        shop,
+        active: true,
+        scheduleEndAt: { lt: new Date() },
+      },
+      data: { active: false },
+    });
+  } catch (error) {
+    if (!isMissingTableError(error, "TierDiscount")) throw error;
+  }
 }
 
 /**
@@ -110,6 +123,7 @@ export const loader = async ({ request }) => {
   } catch (error) {
     if (!isUnknownPrismaArgument(error, "scheduleEndAt")) throw error;
   }
+  await deactivateExpiredTierDiscountsForShop(shop);
   const tierRules = await prisma.thresholdTier.findMany({
     where: { shop },
     orderBy: [{ minSubtotal: "asc" }, { position: "asc" }],
@@ -129,8 +143,10 @@ export const loader = async ({ request }) => {
     tierDiscounts.map((discount) => [String(discount.name || "").trim(), discount]),
   );
   const eligibleTiers = tierRules.filter((tier) => {
-    const linked = discountByName.get(String(tier.discountName || "").trim());
-    if (!linked) return true;
+    if (resolveTierStatus(tier, now) !== "ACTIVE") return false;
+    const name = String(tier.discountName || "Default Discount").trim();
+    const linked = discountByName.get(name);
+    if (!linked) return false;
     return resolveDiscountStatus(linked, now) === "ACTIVE";
   });
   const tierWidgetSettings =
@@ -168,12 +184,15 @@ export const loader = async ({ request }) => {
   } catch {
     widgetDynamicConfig = {};
   }
+  const progressBarDesign = mergeProgressBarDesign(tierWidgetSettings?.progressBarDesignJson ?? "{}");
+
   return Response.json({
     ok: true,
     service: "sce-cart-access",
     shop,
     tiers: visibleTiers,
     appliedTier,
+    progressBarDesign,
     sequentialMsg0:
       tierWidgetSettings?.sequentialMsg0 ||
       "Unlock Tier 1 to apply your cart discount. Then unlock Tier 2 for free shipping.",
@@ -185,10 +204,10 @@ export const loader = async ({ request }) => {
       "Free shipping unlocked",
     sequentialHintZero:
       tierWidgetSettings?.sequentialHintZero ||
-      "Progress: 0% — unlock Tier 1 to start.",
+      "Progress: 0% - unlock Tier 1 to start.",
     sequentialHintMid:
       tierWidgetSettings?.sequentialHintMid ||
-      "Progress: 50% — unlock Tier 2 for free shipping.",
+      "Progress: 50% - unlock Tier 2 for free shipping.",
     tier1Icon:
       tierWidgetSettings?.tier1Icon || "%",
     tier2Icon:
@@ -232,10 +251,10 @@ export const loader = async ({ request }) => {
     widgetDynamicConfig,
     selectorTargets:
       tierWidgetSettings?.selectorTargets ||
-      ".product__info-container, .cart-drawer__content, .drawer__inner, form[action='/cart'], .cart__blocks",
+      ".sce-free-shipping-widget, .product__info-container, .cart-drawer__content, .drawer__inner, form[action='/cart'], .cart__blocks",
     nameTargetSelectors:
       tierWidgetSettings?.nameTargetSelectors ||
-      ".cart-drawer__content, .drawer__inner, .drawer__header, form[action='/cart'], .cart__blocks",
+      ".sce-free-shipping-widget, .cart-drawer__content, .drawer__inner, .drawer__header, form[action='/cart'], .cart__blocks",
     sequentialTitle:
       tierWidgetSettings?.sequentialTitle ||
       "Rewards progress",

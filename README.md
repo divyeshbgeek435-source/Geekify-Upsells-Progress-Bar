@@ -140,6 +140,30 @@ The table `main.Session` does not exist in the current database.
 
 Create the database for Prisma. Run the `setup` script in `package.json` using `npm`, `yarn` or `pnpm`.
 
+### MySQL local setup (phpMyAdmin + Prisma)
+
+If you use MySQL instead of SQLite, ensure Prisma and your app read `DATABASE_URL` from the project root `.env`:
+
+```shell
+DATABASE_URL="mysql://root:@127.0.0.1:3306/geekify"
+```
+
+Then run:
+
+```shell
+npx prisma generate
+npx prisma db push
+```
+
+Quick checks:
+
+```shell
+npx prisma validate
+npx prisma db push
+```
+
+If phpMyAdmin does not show the DB/tables, it is usually connected to a different MySQL server/port than Prisma. Confirm phpMyAdmin is connected to `127.0.0.1:3306` (same host/port as `DATABASE_URL`).
+
 ### Navigating/redirecting breaks an embedded app
 
 Embedded apps must maintain the user session, which can be tricky inside an iFrame. To avoid issues:

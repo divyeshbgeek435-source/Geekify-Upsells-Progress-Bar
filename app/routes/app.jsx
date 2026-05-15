@@ -77,10 +77,10 @@ export default function App() {
 
   return (
     <AppProvider embedded apiKey={apiKey}>
-      <s-app-nav>
-      <s-link href={withShopifyParams("/app/popup-design")}>Popup Design</s-link>
-      <s-link href={withShopifyParams("/app/announcement-bars")}>Announcement Bars</s-link>
-        <s-link href={withShopifyParams("/app/additional")}>Announcement Body</s-link>
+      <s-app-nav> 
+      <s-link href={withShopifyParams("/app/discounts")}>Discounts</s-link>
+      <s-link href={withShopifyParams("/app/popup-design")}>Popup</s-link> 
+      <s-link href={withShopifyParams("/app/announcements")}>Announcements</s-link>
       </s-app-nav>
       <Outlet context={{ onboarding }} />
     </AppProvider>
