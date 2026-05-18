@@ -245,7 +245,7 @@ export const loader = async ({ request }) => {
       "#111827",
     widgetBorderColor:
       tierWidgetSettings?.widgetBorderColor ||
-      "#d1d5db",
+      "#000000",
     widgetUseCustomColors: Boolean(
       tierWidgetSettings?.widgetUseCustomColors ?? false,
     ),

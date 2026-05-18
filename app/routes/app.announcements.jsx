@@ -11,6 +11,10 @@ import {
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import {
+  loadShopBillingContext,
+  rejectIfAnnouncementCreateBlocked,
+} from "../lib/app-billing.server.js";
+import {
   loadAnnouncementHeaderAdminContext,
   loadAnnouncementBodyAdminBlocks,
   handleAnnouncementsUnifiedAction,
@@ -20,7 +24,8 @@ import { AnnouncementHeaderAdmin } from "./app.announcement-bars.jsx";
 import { AnnouncementBodyAdmin } from "./app.additional.jsx";
 
 export const loader = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
+  const { session, billing } = await authenticate.admin(request);
+  const billingPlan = await loadShopBillingContext(billing);
   const shop = session.shop;
   const url = new URL(request.url);
   const kind = url.searchParams.get("kind") || "";
@@ -68,12 +73,22 @@ export const loader = async ({ request }) => {
     headerLoaderData,
     bodyLoaderData,
     mergedRows,
+    billingPlan,
   };
 };
 
 export const action = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
+  const { session, billing } = await authenticate.admin(request);
+  const billingPlan = await loadShopBillingContext(billing);
   const form = await request.formData();
+
+  const limitErr = await rejectIfAnnouncementCreateBlocked(
+    session.shop,
+    billingPlan.planId,
+    form,
+  );
+  if (limitErr) return limitErr;
+
   return handleAnnouncementsUnifiedAction(session.shop, form);
 };
 
@@ -109,7 +124,7 @@ function TypePickerModal({ open, onClose, onPickHeader, onPickBody }) {
             <span>Header strip (app embed / header block)</span>
           </button>
           <button type="button" className="ann-type-card" onClick={onPickBody}>
-            <strong>Announcement body</strong>
+            <strong>Announcement Section</strong>
             <span>Additional UI in cart / drawer</span>
           </button>
         </div>
@@ -165,7 +180,7 @@ function UnifiedDeleteModal({ open, target, onClose, onConfirm }) {
 }
 
 export default function AnnouncementsPage() {
-  const { mergedRows, headerLoaderData, bodyLoaderData } = useLoaderData();
+  const { mergedRows, headerLoaderData, bodyLoaderData, billingPlan } = useLoaderData();
   const actionData = useActionData();
   const location = useLocation();
   const navigate = useNavigate();
@@ -328,6 +343,20 @@ export default function AnnouncementsPage() {
         {actionData?.ok === false && actionData?.error ? (
           <s-banner tone="critical" heading="Action failed">
             {actionData.error}
+            {actionData.planUpgradeRequired ? (
+              <>
+                {" "}
+                <s-link href={withShopifyParams("/app/billing")}>View pricing</s-link>
+              </>
+            ) : null}
+          </s-banner>
+        ) : null}
+
+        {!billingPlan?.isPremium ? (
+          <s-banner tone="info" heading={`${billingPlan.planName} plan`}>
+            Free includes 1 announcement header and 1 announcement Section.{" "}
+            <s-link href={withShopifyParams("/app/billing")}>Upgrade to Premium</s-link> for
+            unlimited announcements.
           </s-banner>
         ) : null}
 
@@ -395,7 +424,7 @@ export default function AnnouncementsPage() {
                   <s-table-row key={`${row.kind}-${row.id}`}>
                     <s-table-cell>
                       <s-text type="strong">
-                        {row.kind === "header" ? "Header / Announcement bar" : "Body / Announcement body"}
+                        {row.kind === "header" ? "Header / Announcement bar" : "Body / Announcement Section"}
                       </s-text>
                     </s-table-cell>
                     <s-table-cell>

@@ -1,7 +1,7 @@
  
 
 .sce-free-shipping-widget {
-  border: 1px solid rgba(0, 0, 0, 0.08);
+  border: 1px solid #000000;
   border-radius: 10px;
   padding: 12px;
   margin: 12px 0;
@@ -75,7 +75,7 @@
 
 /* Rewards progress (sequential): card, bar with badges, step row */
 .sce-free-shipping-widget--sequential {
-  border: 1px solid rgba(15, 23, 42, 0.08);
+  border: 1px solid #000000;
   border-radius: 12px;
   background: #ffffff;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 8px 24px rgba(15, 23, 42, 0.06);

@@ -10037,7 +10037,7 @@
 //     tierWidgetSettings?.widgetTextColor || "#111827",
 //   );
 //   const [widgetBorderColor, setWidgetBorderColor] = useState(
-//     tierWidgetSettings?.widgetBorderColor || "#d1d5db",
+//     tierWidgetSettings?.widgetBorderColor || "#000000",
 //   );
 //   const [widgetUseCustomColors, setWidgetUseCustomColors] = useState(
 //     Boolean(tierWidgetSettings?.widgetUseCustomColors),
@@ -10401,7 +10401,7 @@
 //     );
 //     setWidgetBackgroundColor(tierWidgetSettings?.widgetBackgroundColor || "#ffffff");
 //     setWidgetTextColor(tierWidgetSettings?.widgetTextColor || "#111827");
-//     setWidgetBorderColor(tierWidgetSettings?.widgetBorderColor || "#d1d5db");
+//     setWidgetBorderColor(tierWidgetSettings?.widgetBorderColor || "#000000");
 //     setWidgetUseCustomColors(Boolean(tierWidgetSettings?.widgetUseCustomColors));
 //     setTier1LabelText(tierWidgetSettings?.tier1LabelText || "Discount");
 //     setTier2LabelText(tierWidgetSettings?.tier2LabelText || "Free shipping");
@@ -10512,7 +10512,7 @@
 //       );
 //       setWidgetBackgroundColor(tierWidgetSettings?.widgetBackgroundColor || "#ffffff");
 //       setWidgetTextColor(tierWidgetSettings?.widgetTextColor || "#111827");
-//       setWidgetBorderColor(tierWidgetSettings?.widgetBorderColor || "#d1d5db");
+//       setWidgetBorderColor(tierWidgetSettings?.widgetBorderColor || "#000000");
 //       setWidgetUseCustomColors(Boolean(tierWidgetSettings?.widgetUseCustomColors));
 //       setTier1LabelText(tierWidgetSettings?.tier1LabelText || "Discount");
 //       setTier2LabelText(tierWidgetSettings?.tier2LabelText || "Free shipping");
@@ -12763,6 +12763,12 @@ import {
 } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
+import {
+  loadShopBillingContext,
+  rejectIfDiscountLimitReached,
+} from "../lib/app-billing.server.js";
+import { PREMIUM_PLAN_PRICE_USD } from "../lib/app-plans.shared.js";
+import { saveFreePlanWidgetSettings } from "../lib/widget-plan-access.server.js";
 import prisma from "../db.server";
 import {
   ChartVerticalIcon,
@@ -13161,9 +13167,10 @@ const TIER_DISCOUNT_TYPES = [
   { value: "FIXED_AMOUNT", label: "Fixed Amount" },
 ];
 const MAX_ACTIVE_TIERS = 2;
-/** Max distinct tier discounts (overview rows) per shop. */
-const MAX_TIER_DISCOUNTS = 10;
-const MAX_TIER_DISCOUNTS_MESSAGE = `You can only create up to ${MAX_TIER_DISCOUNTS} tier discounts.`;
+
+function freePlanDiscountLimitMessage(limit) {
+  return `Your Free plan allows up to ${limit} discounts. Upgrade to Premium for unlimited discounts.`;
+}
 
 function parseTierDate(value) {
   if (!value) return null;
@@ -13612,7 +13619,8 @@ async function syncAutoTierDiscount(admin, tiers) {
 // ─── Loader ──────────────────────────────────────────────────────────────────
 
 export const loader = async ({ request }) => {
-  const { admin, session } = await authenticate.admin(request);
+  const { admin, session, billing } = await authenticate.admin(request);
+  const billingPlan = await loadShopBillingContext(billing);
   const url = new URL(request.url);
   const editId = url.searchParams.get("editId");
   const previewSubtotal = Number(url.searchParams.get("previewSubtotal") || 0);
@@ -13767,6 +13775,7 @@ export const loader = async ({ request }) => {
     previewSubtotal: Number.isFinite(previewSubtotal) ? previewSubtotal : 0,
     previewTier,
     shopCurrencyCode,
+    billingPlan,
     errors: json?.errors || null,
   };
 };
@@ -13774,7 +13783,8 @@ export const loader = async ({ request }) => {
 // ─── Action ──────────────────────────────────────────────────────────────────
 
 export const action = async ({ request }) => {
-  const { admin, session } = await authenticate.admin(request);
+  const { admin, session, billing } = await authenticate.admin(request);
+  const billingPlan = await loadShopBillingContext(billing);
   const formData = await request.formData();
   const intent = String(formData.get("intent") || "");
   const id = String(formData.get("id") || "");
@@ -14138,8 +14148,12 @@ export const action = async ({ request }) => {
     const groupExistsForName = limitGroups.some(
       (g) => String(g.discountName || "").trim() === normalizedTierDiscountName,
     );
-    if (!groupExistsForName && limitGroups.length >= MAX_TIER_DISCOUNTS) {
-      return { ok: false, errors: { tier: MAX_TIER_DISCOUNTS_MESSAGE } };
+    if (!groupExistsForName && intent === "tier-create") {
+      const discountLimitErr = await rejectIfDiscountLimitReached(
+        session.shop,
+        billingPlan.planId,
+      );
+      if (discountLimitErr) return discountLimitErr;
     }
 
     if (typeof prisma.tierDiscount?.upsert === "function") {
@@ -14247,6 +14261,10 @@ export const action = async ({ request }) => {
   }
 
   if (intent === "tier-widget-settings-save") {
+    if (!billingPlan.isPremium) {
+      return saveFreePlanWidgetSettings(session.shop, formData);
+    }
+
     const sequentialMsg0 = String(formData.get("sequentialMsg0") ?? "").trim();
     const sequentialMsg1 = String(formData.get("sequentialMsg1") ?? "").trim();
     const sequentialMsg2 = String(formData.get("sequentialMsg2") ?? "").trim();
@@ -14320,7 +14338,7 @@ export const action = async ({ request }) => {
       : "#111827";
     const normalizedWidgetBorderColor = /^#[0-9a-fA-F]{6}$/.test(widgetBorderColor)
       ? widgetBorderColor
-      : "#d1d5db";
+      : "#000000";
     const normalizeColor = (value, fallback) =>
       /^#[0-9a-fA-F]{6}$/.test(String(value || "").trim()) ? String(value).trim() : fallback;
     const widgetDynamicConfigJson = JSON.stringify({
@@ -15022,14 +15040,14 @@ function TierCard({ tier, position, onEdit, onDelete }) {
   );
 }
 
-function OverviewCreateButton({ onClick, children, disabled }) {
+function OverviewCreateButton({ onClick, children, disabled, disabledTitle }) {
   return (
     <button
       type="button"
       className="disc-btn disc-btn-primary disc-create-btn"
       onClick={onClick}
       disabled={disabled}
-      title={disabled ? MAX_TIER_DISCOUNTS_MESSAGE : undefined}
+      title={disabled ? disabledTitle : undefined}
     >
       <span style={{  color: "rgb(0 123 96)"}} aria-hidden="true">+</span>
       <span style={{ color: "rgb(0 123 96)" }}>{children}</span>
@@ -15110,8 +15128,13 @@ export default function DiscountsIndex() {
     previewTier = null,
     previewSubtotal = 0,
     shopCurrencyCode = "USD",
+    billingPlan = null,
   } = useLoaderData() ?? {};
   const { onboarding } = useOutletContext() || {};
+  const isPremium = Boolean(billingPlan?.isPremium);
+  const maxTierDiscounts = billingPlan?.limits?.maxDiscounts ?? null;
+  const tierDiscountLimitMessage =
+    maxTierDiscounts != null ? freePlanDiscountLimitMessage(maxTierDiscounts) : "";
   const actionData = useActionData();
   const revalidator = useRevalidator();
   const location = useLocation();
@@ -15230,7 +15253,7 @@ export default function DiscountsIndex() {
     tierWidgetSettings?.widgetTextColor || "#111827",
   );
   const [widgetBorderColor, setWidgetBorderColor] = useState(
-    tierWidgetSettings?.widgetBorderColor || "#d1d5db",
+    tierWidgetSettings?.widgetBorderColor || "#000000",
   );
   const [widgetUseCustomColors, setWidgetUseCustomColors] = useState(
     Boolean(tierWidgetSettings?.widgetUseCustomColors),
@@ -15489,15 +15512,16 @@ export default function DiscountsIndex() {
     selectedDiscountTierRules.length < MAX_ACTIVE_TIERS &&
     hasAnyAvailableTierType;
   const canProceedToScheduleStep = selectedDiscountTierRules.length > 0;
-  const tierDiscountLimitReached = groupedTierDiscounts.length >= MAX_TIER_DISCOUNTS;
+  const tierDiscountLimitReached =
+    maxTierDiscounts != null && groupedTierDiscounts.length >= maxTierDiscounts;
   const openCreateTierDiscountModal = useCallback(() => {
-    if (groupedTierDiscounts.length >= MAX_TIER_DISCOUNTS) return;
+    if (tierDiscountLimitReached) return;
     setDiscountEditName(""); setDiscountEditOriginalName("");
     setDiscountEditActive(false); setDiscountEditStartAt(""); setDiscountEditEndAt("");
     setTierEditId(""); setTierFormInModalOpen(false); setTierDiscountModalStep(1);
     setTierName(""); setTierMinSubtotal(""); setTierRewardType("FREE_SHIPPING");
     setTierDiscountPercent(""); setTierMessage(""); setShowTierDiscountModal(true);
-  }, [groupedTierDiscounts.length]);
+  }, [tierDiscountLimitReached]);
 
   useEffect(() => {
     const sp = new URLSearchParams(location.search);
@@ -15634,7 +15658,7 @@ export default function DiscountsIndex() {
     );
     setWidgetBackgroundColor(tierWidgetSettings?.widgetBackgroundColor || "#ffffff");
     setWidgetTextColor(tierWidgetSettings?.widgetTextColor || "#111827");
-    setWidgetBorderColor(tierWidgetSettings?.widgetBorderColor || "#d1d5db");
+    setWidgetBorderColor(tierWidgetSettings?.widgetBorderColor || "#000000");
     setWidgetUseCustomColors(Boolean(tierWidgetSettings?.widgetUseCustomColors));
     setTier1LabelText(tierWidgetSettings?.tier1LabelText || "Discount");
     setTier2LabelText(tierWidgetSettings?.tier2LabelText || "Free shipping");
@@ -15745,7 +15769,7 @@ export default function DiscountsIndex() {
       );
       setWidgetBackgroundColor(tierWidgetSettings?.widgetBackgroundColor || "#ffffff");
       setWidgetTextColor(tierWidgetSettings?.widgetTextColor || "#111827");
-      setWidgetBorderColor(tierWidgetSettings?.widgetBorderColor || "#d1d5db");
+      setWidgetBorderColor(tierWidgetSettings?.widgetBorderColor || "#000000");
       setWidgetUseCustomColors(Boolean(tierWidgetSettings?.widgetUseCustomColors));
       setTier1LabelText(tierWidgetSettings?.tier1LabelText || "Discount");
       setTier2LabelText(tierWidgetSettings?.tier2LabelText || "Free shipping");
@@ -15976,7 +16000,7 @@ export default function DiscountsIndex() {
     liveProgress === 0 ? sequentialHintZero : liveProgress === 50 ? sequentialHintMid : sequentialMsg2;
   const liveWidgetBg = widgetBackgroundColor || "#ffffff";
   const liveWidgetText = widgetUseCustomColors ? widgetTextColor : "#111827";
-  const liveWidgetBorder = widgetUseCustomColors ? widgetBorderColor : "#d1d5db";
+  const liveWidgetBorder = widgetUseCustomColors ? widgetBorderColor : "#000000";
 
   // ── Inline CSS ──────────────────────────────────────────────────────────────
   const css = `
@@ -17100,11 +17124,70 @@ export default function DiscountsIndex() {
     @media (max-width: 640px) {
       .disc-advanced-summary-sub { display: none; }
     }
+    .disc-basic-widget-body {
+      padding: 16px;
+    }
+    @media (min-width: 600px) {
+      .disc-basic-widget-body { padding: 20px 24px 24px; }
+    }
+    .disc-basic-upgrade {
+      margin-top: 20px;
+      padding: 14px 16px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #f0f7ff 0%, #f8fafc 100%);
+      border: 1px solid #c7d7fe;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 12px 16px;
+    }
+    .disc-basic-upgrade-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      background: #e0e9ff;
+      color: #005bd3;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      flex-shrink: 0;
+    }
+    .disc-basic-upgrade-content {
+      flex: 1;
+      min-width: min(100%, 220px);
+    }
+    .disc-basic-upgrade-title {
+      margin: 0 0 4px;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--p-color-text, #303030);
+    }
+    .disc-basic-upgrade-text {
+      margin: 0;
+      font-size: 13px;
+      line-height: 1.5;
+      color: var(--p-color-text-secondary, #616161);
+    }
+    .disc-basic-upgrade-actions {
+      flex-shrink: 0;
+    }
+    .disc-basic-upgrade-actions .disc-btn {
+      white-space: nowrap;
+    }
   `;
 
   return (
     <s-page heading="Discounts">
       <style>{css}</style>
+
+      {!isPremium ? (
+        <s-banner tone="info" heading={`${billingPlan?.planName ?? "Free"} plan`}>
+          Up to {maxTierDiscounts ?? 2} discounts, tier label customization only.{" "}
+          <s-link href="/app/billing">Upgrade to Premium</s-link> for unlimited discounts and
+          advanced widget settings.
+        </s-banner>
+      ) : null}
 
       {/* ── Onboarding ────────────────────────────────────────────────────── */}
       {/* {onboarding && (
@@ -17781,7 +17864,7 @@ export default function DiscountsIndex() {
               className="disc-btn disc-btn-primary"
               onClick={openCreateTierDiscountModal}
               disabled={tierDiscountLimitReached}
-              title={tierDiscountLimitReached ? MAX_TIER_DISCOUNTS_MESSAGE : undefined}
+              title={tierDiscountLimitReached ? tierDiscountLimitMessage : undefined}
             >
               ＋ Create first discount
             </button>
@@ -17819,14 +17902,16 @@ export default function DiscountsIndex() {
                 <OverviewCreateButton
                   onClick={openCreateTierDiscountModal}
                   disabled={tierDiscountLimitReached}
+                  disabledTitle={tierDiscountLimitMessage}
                 >
                   Add tier discount
                 </OverviewCreateButton>
-                {tierDiscountLimitReached && (
+                {tierDiscountLimitReached && tierDiscountLimitMessage ? (
                   <span style={{ fontSize: 12, color: "#6b7280", textAlign: "right", maxWidth: 280 }}>
-                    {MAX_TIER_DISCOUNTS_MESSAGE}
+                    {tierDiscountLimitMessage}{" "}
+                    <s-link href="/app/billing">View pricing</s-link>
                   </span>
-                )}
+                ) : null}
               </div>
             </div>
             <div className="disc-table-wrapper">
@@ -17933,7 +18018,155 @@ export default function DiscountsIndex() {
         </s-section>
       )}
 
-      {/* ── Advanced Widget Settings ──────────────────────────────────────── */}
+      {!isPremium ? (
+        <s-section heading="Basic widget customization">
+          <div className="disc-advanced-card">
+            <div className="disc-advanced-body disc-basic-widget-body">
+              <div className="disc-advanced-settings-intro" style={{ marginBottom: 20 }}>
+                <p className="disc-advanced-settings-intro-title">Customize your tier widget</p>
+                <p className="disc-advanced-settings-intro-text">
+                  On the Free plan you can set Tier 1 and Tier 2 label text. Changes preview live -
+                  save when you are ready to publish to your storefront.
+                </p>
+              </div>
+              <div className="disc-advanced-layout">
+                <div className="disc-advanced-settings-wrap">
+                  <Form method="post" className="disc-advanced-form">
+                    <input type="hidden" name="intent" value="tier-widget-settings-save" />
+                    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+                      <div className="disc-save-bar">
+                        <div className="disc-save-bar-meta">
+                          <span className="disc-save-bar-label">Basic widget settings</span>
+                          <span className="disc-save-bar-hint">
+                            Save to apply tier labels on your storefront
+                          </span>
+                        </div>
+                        <button type="submit" className="disc-btn disc-btn-primary">
+                          Save settings
+                        </button>
+                      </div>
+                      <div className="disc-advanced-group">
+                        <div className="disc-advanced-group-head">
+                          <div className="disc-advanced-group-title">Tier labels</div>
+                          <div className="disc-advanced-group-help">
+                            Text shown under each tier on the progress widget
+                          </div>
+                        </div>
+                        <div className="disc-grid-2">
+                          <div className="disc-field">
+                            <label>Tier 1 label</label>
+                            <s-text-field
+                              name="tier1LabelText"
+                              value={tier1LabelText}
+                              onChange={(e) => setTier1LabelText(readInputText(e, tier1LabelText))}
+                              error={actionData?.errors?.tier1LabelText}
+                              autocomplete="off"
+                            />
+                          </div>
+                          <div className="disc-field">
+                            <label>Tier 2 label</label>
+                            <s-text-field
+                              name="tier2LabelText"
+                              value={tier2LabelText}
+                              onChange={(e) => setTier2LabelText(readInputText(e, tier2LabelText))}
+                              error={actionData?.errors?.tier2LabelText}
+                              autocomplete="off"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </Form>
+                </div>
+                <div className="disc-advanced-preview-wrap">
+                  <div className="disc-advanced-preview">
+                    <div className="disc-advanced-preview-head">
+                      <div className="disc-advanced-preview-head-text">
+                        <span className="disc-advanced-preview-title">Live preview</span>
+                        <p className="disc-advanced-preview-help">
+                          Updates as you edit tier labels
+                        </p>
+                      </div>
+                    </div>
+                    <DiscAdvancedLiveWidget
+                      shopCurrencyCode={shopCurrencyCode}
+                      showHeading={showHeading}
+                      sequentialTitle={sequentialTitle}
+                      headingColor={headingColor}
+                      showSubheading={showSubheading}
+                      subheadingColor={subheadingColor}
+                      liveProgress={liveProgress}
+                      sequentialMsg0={sequentialMsg0}
+                      sequentialMsg1={sequentialMsg1}
+                      sequentialMsg2={sequentialMsg2}
+                      barFillColor={barFillColor}
+                      barTrackColor={barTrackColor}
+                      iconBackgroundColor={iconBackgroundColor}
+                      iconTextColor={iconTextColor}
+                      showTierIcons={showTierIcons}
+                      tier1Icon={tier1Icon}
+                      tier2Icon={tier2Icon}
+                      showTierLabels={showTierLabels}
+                      showTier1Heading={showTier1Heading}
+                      showTier2Heading={showTier2Heading}
+                      tier1LabelText={tier1LabelText}
+                      tier2LabelText={tier2LabelText}
+                      tierHeadingColor={tierHeadingColor}
+                      showTierMinimums={showTierMinimums}
+                      minAmountPrefixText={minAmountPrefixText}
+                      liveTier1Min={liveTier1Min}
+                      liveTier2Min={liveTier2Min}
+                      showHint={showHint}
+                      hintColor={hintColor}
+                      subtotalLabel={subtotalLabel}
+                      livePreviewSubtotal={livePreviewSubtotal}
+                      estimatedShippingLabel={estimatedShippingLabel}
+                      liveHintText={liveHintText}
+                      liveWidgetBg={liveWidgetBg}
+                      liveWidgetText={liveWidgetText}
+                      liveWidgetBorder={liveWidgetBorder}
+                      progressBarDesign={progressBarDesign}
+                    />
+                    <div className="disc-live-preview-input">
+                      <s-text-field
+                        label={`Preview cart subtotal (${shopCurrencyCode})`}
+                        type="number"
+                        min="0"
+                        value={previewCartTotal}
+                        onChange={(e) =>
+                          setPreviewCartTotal(
+                            String(Math.max(0, readStrictNumber(e, Number(previewCartTotal) || 0))),
+                          )
+                        }
+                        autocomplete="off"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="disc-basic-upgrade">
+                <span className="disc-basic-upgrade-icon" aria-hidden="true">
+                  ✦
+                </span>
+                <div className="disc-basic-upgrade-content">
+                  <p className="disc-basic-upgrade-title">Advanced widget settings (Premium)</p>
+                  <p className="disc-basic-upgrade-text">
+                    Widget colors, messages, icons, progress bar styling, visibility controls, and
+                    interactive preview editing unlock with Premium.
+                  </p>
+                </div>
+                <div className="disc-basic-upgrade-actions">
+                  <a href="/app/billing" className="disc-btn disc-btn-primary">
+                    {`Upgrade - $${PREMIUM_PLAN_PRICE_USD}/month`}
+                  </a>
+                </div>
+              </div>
+            </div>
+          </div>
+        </s-section>
+      ) : null}
+
+      {isPremium ? (
       <s-section>
         <div className="disc-advanced-card">
           <details>
@@ -17941,7 +18174,7 @@ export default function DiscountsIndex() {
               <span className="disc-advanced-summary-icon">⚙</span>
               <span>Advanced widget settings</span>
               <span className="disc-advanced-summary-sub">
-                Optional - adjust colors, messages, and visibility
+                Full widget customization and premium features
               </span>
             </summary>
             <div className="disc-advanced-body">
@@ -18395,6 +18628,7 @@ export default function DiscountsIndex() {
           </details>
         </div>
       </s-section>
+      ) : null}
     </s-page>
   );
 }

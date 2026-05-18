@@ -75,7 +75,7 @@ const DEFAULT_WIDGET_SETTINGS = {
   estimatedShippingLabel: "Estimated shipping",
   widgetBackgroundColor: "#ffffff",
   widgetTextColor: "#111827",
-  widgetBorderColor: "#d1d5db",
+  widgetBorderColor: "#000000",
   widgetUseCustomColors: false,
   tier1LabelText: "Discount",
   tier2LabelText: "Free shipping",

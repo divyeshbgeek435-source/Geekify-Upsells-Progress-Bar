@@ -3998,7 +3998,7 @@ export function AnnouncementHeaderAdmin({
     if (actionData?.ok && actionData?.createdId) {
       setCreateModalOpen(false);
       setDesignModalOpen(false);
-      // Return to list without `edit` — otherwise loader sets `editingBar` and the edit modal opens.
+      // Return to list without `edit` - otherwise loader sets `editingBar` and the edit modal opens.
       const listPath =
         navigateQueryStyle === "unified" ? `${routePrefix}?kind=header` : routePrefix;
       navigate(withShopifyParams(listPath));

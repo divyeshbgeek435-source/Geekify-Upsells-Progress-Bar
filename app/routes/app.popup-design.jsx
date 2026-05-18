@@ -3724,7 +3724,7 @@
 
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Form, useActionData, useFetcher, useLoaderData, useOutletContext, useRevalidator, useSearchParams } from "react-router";
+import { Form, useActionData, useFetcher, useLoaderData, useRevalidator, useSearchParams } from "react-router";
 import {
   defaultPopupDesignConfig,
   generatePopupDesignId,
@@ -3744,6 +3744,11 @@ import {
   getPopupTemplateMeta,
 } from "../lib/popup-design-templates.js";
 import { authenticate } from "../shopify.server";
+import {
+  loadShopBillingContext,
+  rejectIfPopupLimitReached,
+} from "../lib/app-billing.server.js";
+import { getPlanLimits } from "../lib/app-plans.shared.js";
 import prisma from "../db.server";
 import { buildPopupTemplate } from "../lib/popup-design-template.js";
 
@@ -3796,16 +3801,9 @@ const EDITOR_TABS = [
   { id: "colors",    label: "Colors",    icon: "color" },
 ];
 
-/** Global cap: max popups per shop (mirrored in UI via `popups.length`). */
-const MAX_POPUPS_PER_SHOP = 5;
-const POPUP_LIMIT_REACHED_MESSAGE = "You can only create up to 5 popups.";
-
-async function rejectIfShopPopupLimitReached(shop) {
-  const count = await prisma.popupDesign.count({ where: { shop } });
-  if (count >= MAX_POPUPS_PER_SHOP) {
-    return { ok: false, error: POPUP_LIMIT_REACHED_MESSAGE };
-  }
-  return null;
+function popupLimitReachedMessage(maxPopups) {
+  if (maxPopups == null) return "";
+  return `Your Free plan allows up to ${maxPopups} popup design${maxPopups === 1 ? "" : "s"}. Upgrade to Premium for unlimited popups.`;
 }
 
 function getStorefrontTargetingExplainer(pageTarget, customPathContains) {
@@ -3861,7 +3859,8 @@ function fromDatetimeLocalValue(local) {
 }
 
 export const loader = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
+  const { session, billing } = await authenticate.admin(request);
+  const billingPlan = await loadShopBillingContext(billing);
   const shop = session.shop;
   const rows = await prisma.popupDesign.findMany({
     where: { shop },
@@ -3873,7 +3872,7 @@ export const loader = async ({ request }) => {
     const config = { ...raw, popupDesignId: row.popupDesignId || resolvePopupDesignId(raw, row.id) };
     return { id: row.id, name: row.name, savedAt: row.updatedAt.toISOString(), config, templateJson: row.templateJson ?? "{}" };
   });
-  return { popups };
+  return { popups, billingPlan };
 };
 
 function buildConfigPayload(form) {
@@ -3939,13 +3938,14 @@ function buildConfigPayload(form) {
 }
 
 export const action = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
+  const { session, billing } = await authenticate.admin(request);
+  const billingPlan = await loadShopBillingContext(billing);
   const shop = session.shop;
   const form = await request.formData();
   const intent = String(form.get("intent") || "");
 
   if (intent === "create") {
-    const limitErr = await rejectIfShopPopupLimitReached(shop);
+    const limitErr = await rejectIfPopupLimitReached(shop, billingPlan.planId);
     if (limitErr) return limitErr;
     const name = String(form.get("popupName") || "Untitled popup").trim() || "Untitled popup";
     const cfg = defaultPopupDesignConfig();
@@ -3960,7 +3960,7 @@ export const action = async ({ request }) => {
   }
 
   if (intent === "create_with_config") {
-    const limitErr = await rejectIfShopPopupLimitReached(shop);
+    const limitErr = await rejectIfPopupLimitReached(shop, billingPlan.planId);
     if (limitErr) return limitErr;
     const name = String(form.get("popupName") || "Untitled popup").trim() || "Untitled popup";
     const rawJson = String(form.get("configJson") || "{}");
@@ -3985,7 +3985,7 @@ export const action = async ({ request }) => {
   }
 
   if (intent === "duplicate") {
-    const limitErr = await rejectIfShopPopupLimitReached(shop);
+    const limitErr = await rejectIfPopupLimitReached(shop, billingPlan.planId);
     if (limitErr) return limitErr;
     const rowId = String(form.get("rowId") || "").trim();
     const src = await prisma.popupDesign.findFirst({ where: { id: rowId, shop } });
@@ -4203,7 +4203,7 @@ function hydrateFromConfig(c) {
 
 // ─── Main component ───────────────────────────────────────────────────────────
 export default function PopupDesignPage() {
-  const { popups } = useLoaderData();
+  const { popups, billingPlan } = useLoaderData();
   const actionData = useActionData();
   const fetcher = useFetcher();
   const revalidator = useRevalidator();
@@ -4290,7 +4290,10 @@ export default function PopupDesignPage() {
   const [tablePage, setTablePage] = useState(1);
 
   const totalPopupRecords = popups.length;
-  const atPopupLimit = totalPopupRecords >= MAX_POPUPS_PER_SHOP;
+  const popupMax = billingPlan?.limits?.maxPopups ?? getPlanLimits(billingPlan?.planId).maxPopups;
+  const atPopupLimit =
+    popupMax != null && totalPopupRecords >= popupMax;
+  const popupLimitMessage = popupLimitReachedMessage(popupMax);
   const totalTablePages = Math.max(1, Math.ceil(totalPopupRecords / tablePageSize));
   const currentTablePage = Math.min(tablePage, totalTablePages);
   const tableStart = (currentTablePage - 1) * tablePageSize;
@@ -4885,12 +4888,26 @@ export default function PopupDesignPage() {
         {(actionData?.ok === false && actionData?.error) || (fetcher.data?.ok === false && fetcher.data?.error) ? (
           <s-banner tone="critical" heading="Something went wrong">
             {actionData?.error || fetcher.data?.error}
+            {(actionData?.planUpgradeRequired || fetcher.data?.planUpgradeRequired) ? (
+              <>
+                {" "}
+                <s-link href="/app/billing">View pricing</s-link>
+              </>
+            ) : null}
           </s-banner>
         ) : null}
 
         {/* ── Popup List ────────────────────────────────────────────────────── */}
         {!configModal && (
           <div style={{ maxWidth: 1100, marginInline: "auto", width: "100%" }}>
+            {!billingPlan?.isPremium && popupMax != null ? (
+              <div style={{ marginBottom: 16 }}>
+                <s-banner tone="info" heading={`${billingPlan.planName} plan`}>
+                  Up to {popupMax} popup{popupMax === 1 ? "" : "s"} on Free.{" "}
+                  <s-link href="/app/billing">Upgrade to Premium</s-link> for unlimited popups.
+                </s-banner>
+              </div>
+            ) : null}
             <s-section >
               {popups.length === 0 ? (
                 /* Empty state */
@@ -4940,8 +4957,8 @@ export default function PopupDesignPage() {
                       </s-text> */}
                     </div>
                     <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8 }}>
-                      {atPopupLimit ? (
-                        <s-text tone="subdued">{POPUP_LIMIT_REACHED_MESSAGE}</s-text>
+                      {atPopupLimit && popupLimitMessage ? (
+                        <s-text tone="subdued">{popupLimitMessage}</s-text>
                       ) : null}
                       <button
                         type="button"
@@ -5098,8 +5115,8 @@ export default function PopupDesignPage() {
                   <div style={{ fontSize: 22, fontWeight: 700, color: "#0f172a" }}>Choose a design template</div>
                   <div style={{ fontSize: 13, color: "#8896a8", marginTop: 4 }}>Start from a ready - made layout - you can customise everything after.</div>
                   {atPopupLimit ? (
-                    <div style={{ marginTop: 12 }}>
-                      <s-banner tone="warning">{POPUP_LIMIT_REACHED_MESSAGE}</s-banner>
+                    <div style={{ marginTop: 12  }}>
+                      <s-banner tone="warning">{popupLimitMessage}</s-banner>
                     </div>
                   ) : null}
                 </div>

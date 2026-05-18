@@ -8,6 +8,7 @@ import {
 } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
+import { loadShopBillingContext } from "../lib/app-billing.server.js";
 import prisma from "../db.server";
 import {
   ChartVerticalIcon,
@@ -247,7 +248,8 @@ function groupTiersByDiscount(tiers, discounts = []) {
 }
 
 export const loader = async ({ request }) => {
-  const { admin, session } = await authenticate.admin(request);
+  const { admin, session, billing } = await authenticate.admin(request);
+  const billingPlan = await loadShopBillingContext(billing);
 
   const response = await admin.graphql(LIST_DISCOUNTS_FOR_USAGE, {
     variables: { first: 50 },
@@ -360,6 +362,7 @@ export const loader = async ({ request }) => {
     tierRules,
     tierDiscounts,
     totalDiscountUsageCount,
+    billingPlan,
     errors: json?.errors || null,
     setupDetection: {
       hasTierDiscount: setupHasTierDiscount,
@@ -952,12 +955,12 @@ function SetupGuideSection({ onboarding, setupDetection, withShopifyParams }) {
                     <p className="setup-guide-hint">
                       The app cannot see your theme editor. After the embed is turned <strong>on</strong> and you have
                       clicked <strong>Save</strong> in the theme editor, click <strong>Confirm app embed is saved</strong>{" "}
-                      above—this step will show as completed. For popups on product or cart pages, also enable{" "}
+                      above - this step will show as completed. For popups on product or cart pages, also enable{" "}
                       <strong>Popup design (site-wide)</strong> under App embeds and paste your Popup design ID there.
                     </p>
                     <p className="setup-guide-hint">
                       After deploy, open{" "}
-                      <code>https://YOUR-STORE.myshopify.com/apps/sce/health</code> in a browser—you should see JSON with{" "}
+                      <code>https://YOUR-STORE.myshopify.com/apps/sce/health</code> in a browser - you should see JSON with{" "}
                       <code>&quot;ok&quot;:true</code>. If not, run <code>shopify app deploy</code> and re-open the app in admin to
                       accept the <code>write_app_proxy</code> scope.
                     </p>
@@ -1070,6 +1073,7 @@ export default function AppIndexTierStatus() {
     tierRules = [],
     tierDiscounts = [],
     totalDiscountUsageCount = 0,
+    billingPlan,
     setupDetection: setupDetectionRaw,
     contentCounts: contentCountsRaw,
   } = useLoaderData() ?? {};
@@ -1127,6 +1131,19 @@ export default function AppIndexTierStatus() {
     <s-page heading="Geekify: Upsells, Progress Bar">
       <style>{tierStatusCss}</style>
       <style>{setupGuideCss}</style>
+
+      {billingPlan ? (
+        <s-banner tone={billingPlan.isPremium ? "success" : "info"} heading="Your plan">
+          {billingPlan.isPremium
+            ? `You are on ${billingPlan.planName} ($5/month). Thank you for subscribing.`
+            : (
+                <>
+                  You are on the {billingPlan.planName} plan.{" "}
+                  <s-link href={withShopifyParams("/app/billing")}>Upgrade to Premium</s-link>
+                </>
+              )}
+        </s-banner>
+      ) : null}
 
       <SetupGuideSection
         onboarding={onboarding}
@@ -1254,7 +1271,7 @@ export default function AppIndexTierStatus() {
             <div className="disc-tier-metric-sub">Header strip bars (Announcements → bar type).</div>
           </div>
           <div className="disc-tier-metric">
-            <div className="disc-tier-metric-label">Announcement body blocks</div>
+            <div className="disc-tier-metric-label">Announcement Section blocks</div>
             <div
               style={{
                 display: "flex",
@@ -1266,8 +1283,8 @@ export default function AppIndexTierStatus() {
               <div
                 className="disc-tier-metric-icon-badge"
                 style={DISC_TIER_METRIC_ICON_BADGE_STYLE}
-                title="Announcement body blocks"
-                aria-label="Announcement body blocks"
+                title="Announcement Section blocks"
+                aria-label="Announcement Section blocks"
               >
                 <LayoutSectionIcon width={20} height={20} aria-hidden style={DISC_TIER_METRIC_ICON_COLOR} />
               </div>

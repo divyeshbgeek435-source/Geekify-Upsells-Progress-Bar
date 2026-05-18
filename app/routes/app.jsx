@@ -3,6 +3,7 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { getShopifyAppClientId } from "../lib/shopify-config.server";
 import { authenticate } from "../shopify.server";
+import { loadShopBillingContext } from "../lib/app-billing.server.js";
 
 const APP_EMBED_BLOCK_HANDLE = "free-shipping-progress-embed";
 const CART_PAGE_BLOCK_HANDLE = "free-shipping-progress-block";
@@ -11,7 +12,8 @@ const POPUP_DESIGN_BLOCK_HANDLE = "popup-design-block";
 const POPUP_DESIGN_EMBED_HANDLE = "popup-design-embed";
 
 export const loader = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
+  const { session, billing } = await authenticate.admin(request);
+  const billingPlan = await loadShopBillingContext(billing);
   const shop = session.shop;
   const storeHandle = shop.replace(/\.myshopify\.com$/i, "");
 
@@ -64,11 +66,11 @@ export const loader = async ({ request }) => {
     popupDesignEmbedHandle: POPUP_DESIGN_EMBED_HANDLE,
   };
 
-  return { apiKey: apiKeyForBridge, onboarding };
+  return { apiKey: apiKeyForBridge, onboarding, billingPlan };
 };
 
 export default function App() {
-  const { apiKey, onboarding } = useLoaderData();
+  const { apiKey, onboarding, billingPlan } = useLoaderData();
   const location = useLocation();
 
   const withShopifyParams = (path) => {
@@ -89,8 +91,9 @@ export default function App() {
       <s-link href={withShopifyParams("/app/discounts")}>Discounts</s-link>
       <s-link href={withShopifyParams("/app/popup-design")}>Popup</s-link> 
       <s-link href={withShopifyParams("/app/announcements")}>Announcements</s-link>
+      <s-link href={withShopifyParams("/app/billing")}>Pricing</s-link>
       </s-app-nav>
-      <Outlet context={{ onboarding }} />
+      <Outlet context={{ onboarding, billingPlan }} />
     </AppProvider>
   );
 }

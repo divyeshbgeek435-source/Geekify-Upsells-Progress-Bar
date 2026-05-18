@@ -66,7 +66,7 @@
   var estimatedShippingLabel = script.dataset.estimatedShippingLabel || "Estimated shipping";
   var widgetBackgroundColor = script.dataset.widgetBackgroundColor || "#ffffff";
   var widgetTextColor = script.dataset.widgetTextColor || "#111827";
-  var widgetBorderColor = script.dataset.widgetBorderColor || "#d1d5db";
+  var widgetBorderColor = script.dataset.widgetBorderColor || "#000000";
   var widgetUseCustomColors = String(script.dataset.widgetUseCustomColors || "").toLowerCase() === "true";
   var tier1LabelText = script.dataset.tier1LabelText || "Discount";
   var tier2LabelText = script.dataset.tier2LabelText || "Free shipping";
@@ -907,8 +907,10 @@
     if (!root) return;
     if (widgetBackgroundColor) root.style.backgroundColor = widgetBackgroundColor;
     else root.style.backgroundColor = "";
+    root.style.borderColor = "#000000";
+    root.style.borderWidth = "1px";
+    root.style.borderStyle = "solid";
     if (widgetUseCustomColors) {
-      if (widgetBorderColor) root.style.borderColor = widgetBorderColor;
       if (widgetTextColor) {
         root.style.color = widgetTextColor;
         var colorTargets = root.querySelectorAll(
@@ -920,7 +922,6 @@
       }
     } else {
       root.style.color = "";
-      root.style.borderColor = "";
       var resetTargets = root.querySelectorAll(
         ".sce-free-shipping-widget__title, .sce-free-shipping-widget__message, .sce-free-shipping-widget__hint, .sce-seq-title, .sce-seq-message, .sce-seq-hint, .sce-seq-bar-cap__label, .sce-seq-bar-cap__price, .sce-milestone"
       );

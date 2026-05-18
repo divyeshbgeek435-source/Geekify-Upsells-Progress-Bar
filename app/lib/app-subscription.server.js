@@ -1,13 +1,17 @@
+import { APP_PLAN_ID } from "./app-plans.shared.js";
+
 /**
- * Whether the shop has at least one ACTIVE Shopify app subscription (e.g. $2/mo plan).
- * Uses Admin API; no extra billing config in shopify.server.js required.
+ * Whether the shop has an active Premium app subscription ($5/mo).
+ * Prefer `loadShopBillingContext(billing)` when you have the billing helper from authenticate.
  */
 export async function shopHasActiveAppSubscription(admin) {
   const query = `#graphql
-    query AnnouncementBarSubscriptionStatus {
+    query AppPremiumSubscriptionStatus {
       currentAppInstallation {
         activeSubscriptions {
+          name
           status
+          test
         }
       }
     }
@@ -25,4 +29,10 @@ export async function shopHasActiveAppSubscription(admin) {
     console.warn("[app-subscription] request failed", e?.message);
     return false;
   }
+}
+
+/** @deprecated Use resolveShopAppPlan / loadShopBillingContext */
+export async function shopPlanIdFromAdmin(admin) {
+  const isPremium = await shopHasActiveAppSubscription(admin);
+  return isPremium ? APP_PLAN_ID.PREMIUM : APP_PLAN_ID.FREE;
 }
