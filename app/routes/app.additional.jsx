@@ -1418,6 +1418,14 @@ import {
 } from "../lib/additional-ui-config.js";
 import { authenticate } from "../shopify.server";
 import {
+  loadShopBillingContext,
+  rejectIfDeleteNotAllowed,
+} from "../lib/app-billing.server.js";
+import {
+  PlanGatedDeleteTooltip,
+  useBillingUpgradeHref,
+} from "../components/plan-gated-delete.jsx";
+import {
   loadAnnouncementBodyAdminBlocks,
   handleAnnouncementBodyAdminAction,
 } from "../lib/announcements-admin.server.js";
@@ -1553,8 +1561,13 @@ export const loader = async ({ request }) => {
 };
 
 export const action = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
+  const { session, billing } = await authenticate.admin(request);
+  const billingPlan = await loadShopBillingContext(billing);
   const form = await request.formData();
+  if (String(form.get("intent") || "") === "delete") {
+    const deleteBlock = rejectIfDeleteNotAllowed(billingPlan.planId);
+    if (deleteBlock) return deleteBlock;
+  }
   return handleAnnouncementBodyAdminAction(session.shop, form);
 };
 
@@ -1570,7 +1583,9 @@ export function AnnouncementBodyAdmin({
   const submit = useSubmit();
   const navigate = useNavigate();
   const location = useLocation();
-  const { onboarding } = useOutletContext() || {};
+  const { onboarding, billingPlan } = useOutletContext() || {};
+  const canDeleteRecords = Boolean(billingPlan?.isPremium);
+  const billingUpgradeHref = useBillingUpgradeHref();
 
   const withShopifyParams = useCallback(
     (path) => {
@@ -1792,6 +1807,7 @@ export function AnnouncementBodyAdmin({
   };
 
   const requestDelete = (row) => {
+    if (!canDeleteRecords) return;
     setDeleteTarget(row);
   };
 
@@ -1800,7 +1816,7 @@ export function AnnouncementBodyAdmin({
   };
 
   const confirmDelete = () => {
-    if (!deleteTarget?.rowId) return;
+    if (!canDeleteRecords || !deleteTarget?.rowId) return;
     submit(
       { intent: "delete", rowId: deleteTarget.rowId, recordKind: "body" },
       { method: "post" },
@@ -2015,17 +2031,21 @@ export function AnnouncementBodyAdmin({
                           >
 
                           </s-button>
-                          <s-button
-                            type="button"
-                            variant="secondary"
-                            tone="critical"
-                            icon="delete"
-                            // className="sce-btn sce-btn-sm sce-btn-danger"
-                            disabled={isDeleting}
-                            onClick={() => requestDelete(row)}
+                          <PlanGatedDeleteTooltip
+                            canDelete={canDeleteRecords}
+                            upgradeHref={billingUpgradeHref}
                           >
-
-                          </s-button>
+                            <s-button
+                              type="button"
+                              variant="secondary"
+                              tone="critical"
+                              icon="delete"
+                              disabled={!canDeleteRecords || isDeleting}
+                              onClick={
+                                canDeleteRecords ? () => requestDelete(row) : undefined
+                              }
+                            />
+                          </PlanGatedDeleteTooltip>
                         </div>
                       </td>
                     </tr>

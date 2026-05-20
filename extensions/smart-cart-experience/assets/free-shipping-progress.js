@@ -138,7 +138,7 @@
       barSectionMarginTopPx: 30,
       barSectionMarginBottomPx: 6,
       badgeSizePx: 46,
-      captionGapPx: 8,
+      captionGapPx: 18,
       transitionMs: 280,
       badgeHoverScalePercent: 104,
       tier1: { before: phInactive(), after: phActive() },
@@ -388,10 +388,10 @@
 
   function applyDynamicTierLabels(prismaTiers) {
     if (!Array.isArray(prismaTiers) || prismaTiers.length === 0) {
-      tier1Label = String(script.dataset.tier1Label || "Discount");
-      tier2Label = String(script.dataset.tier2Label || "Free shipping");
-      tier1TagText = String(script.dataset.tier1TagText || "10% OFF");
-      tier2TagText = String(script.dataset.tier2TagText || "Free shipping");
+      tier1LabelText = "Tier 1";
+      tier2LabelText = "Tier 2";
+      tier1Label = tier1LabelText;
+      tier2Label = tier2LabelText;
       return;
     }
     var active = prismaTiers.filter(function (t) { return t && t.active !== false; });
@@ -399,44 +399,39 @@
     var t1 = active[0];
     var t2 = active.length > 1 ? active[1] : null;
     if (t1) {
+      tier1LabelText = String(t1.name || "Tier 1").trim() || "Tier 1";
+      tier1Label = tier1LabelText;
       var r1 = String(t1.rewardType || "").toUpperCase();
       var v1 = Number(t1.discountPercent || 0);
-      tier1Label =
-        r1 === "FREE_SHIPPING"
-          ? "Free shipping"
-          : r1 === "FIXED_AMOUNT"
-            ? "Fixed discount"
-            : "Discount";
       if (r1 === "FREE_SHIPPING") {
-        tier1TagText = "Free shipping";
+        tier1TagText = tier1LabelText;
       } else if (r1 === "FIXED_AMOUNT") {
         tier1TagText =
           v1 > 0
             ? formatMoney(majorUnitsToCartMinor(v1, currencyExponentAtBoot)) + " OFF"
             : "Fixed amount";
       } else {
-        tier1TagText = v1 > 0 ? String(v1.toFixed(0)) + "% OFF" : "Discount";
+        tier1TagText = v1 > 0 ? String(v1.toFixed(0)) + "% OFF" : tier1LabelText;
       }
     }
     if (t2) {
+      tier2LabelText = String(t2.name || "Tier 2").trim() || "Tier 2";
+      tier2Label = tier2LabelText;
       var r2 = String(t2.rewardType || "").toUpperCase();
       var v2 = Number(t2.discountPercent || 0);
-      tier2Label =
-        r2 === "FREE_SHIPPING"
-          ? "Free shipping"
-          : r2 === "FIXED_AMOUNT"
-            ? "Fixed discount"
-            : "Discount";
       if (r2 === "FREE_SHIPPING") {
-        tier2TagText = "Free shipping";
+        tier2TagText = tier2LabelText;
       } else if (r2 === "FIXED_AMOUNT") {
         tier2TagText =
           v2 > 0
             ? formatMoney(majorUnitsToCartMinor(v2, currencyExponentAtBoot)) + " OFF"
             : "Fixed amount";
       } else {
-        tier2TagText = v2 > 0 ? String(v2.toFixed(0)) + "% OFF" : "Discount";
+        tier2TagText = v2 > 0 ? String(v2.toFixed(0)) + "% OFF" : tier2LabelText;
       }
+    } else {
+      tier2LabelText = "";
+      tier2Label = "";
     }
   }
 
@@ -480,6 +475,8 @@
       widgetUseCustomColors = Boolean(data.widgetUseCustomColors);
       if (data.tier1LabelText) tier1LabelText = String(data.tier1LabelText);
       if (data.tier2LabelText) tier2LabelText = String(data.tier2LabelText);
+      if (data.tier1LabelText) tier1Label = tier1LabelText;
+      if (data.tier2LabelText) tier2Label = tier2LabelText;
       if (data.minAmountPrefixText) minAmountPrefixText = String(data.minAmountPrefixText);
       showTierIcons = data.showTierIcons !== false;
       showTierLabels = data.showTierLabels !== false;
@@ -1214,7 +1211,7 @@
     var barH = Number(bs.barHeightPx) > 0 ? Number(bs.barHeightPx) : 10;
     var br = Number(bs.barBorderRadiusPx) >= 0 ? Number(bs.barBorderRadiusPx) : 999;
     var transMs = Number(bs.transitionMs) >= 0 ? Number(bs.transitionMs) : 280;
-    var capGap = Number(bs.captionGapPx) >= 0 ? Number(bs.captionGapPx) : 8;
+    var capGap = Number(bs.captionGapPx) >= 0 ? Number(bs.captionGapPx) : 18;
     var mt = Number(bs.barSectionMarginTopPx) >= 0 ? Number(bs.barSectionMarginTopPx) : 30;
     var mb = Number(bs.barSectionMarginBottomPx) >= 0 ? Number(bs.barSectionMarginBottomPx) : 6;
     var hoverSc = Number(bs.badgeHoverScalePercent) >= 100 ? Number(bs.badgeHoverScalePercent) / 100 : 1.04;
@@ -1263,7 +1260,7 @@
       mainBar.style.height = barH + "px";
       mainBar.style.borderRadius = br >= 999 ? "999px" : br + "px";
       mainBar.style.marginTop = mt + "px";
-      mainBar.style.marginBottom = (capGap + 4) + "px";
+      mainBar.style.marginBottom = "0";
       mainBar.style.marginLeft = barInset + "px";
       mainBar.style.marginRight = barInset + "px";
       mainBar.style.overflow = "visible";
@@ -1288,9 +1285,9 @@
       if (!el) return;
       el.style.width = badgeSize + "px";
       el.style.height = badgeSize + "px";
-      el.style.background = phase.badgeBackgroundColor || iconBackgroundColor;
-      el.style.color = phase.iconColor || iconTextColor;
-      el.style.border = "2px solid " + (phase.badgeBorderColor || "#000000");
+      el.style.background = phase.badgeBackgroundColor || "#ffffff";
+      el.style.color = phase.iconColor || "#000000";
+      el.style.border = "none";
       el.style.boxShadow = phase.badgeShadow || "none";
       el.style.outline = "none";
       el.style.transition =
@@ -1319,27 +1316,29 @@
 
     var barCapsEl = root.querySelector(".sce-seq-bar-caps");
     if (barCapsEl) {
-      barCapsEl.style.marginLeft = "10px";
-      barCapsEl.style.marginRight = "10px";
-      barCapsEl.style.marginTop = "20px";
+      barCapsEl.style.marginLeft = barInset + "px";
+      barCapsEl.style.marginRight = barInset + "px";
+      barCapsEl.style.marginTop = capGap + "px";
       barCapsEl.style.position = "relative";
     }
     if (cap1) {
       cap1.style.left = tierCount > 1 ? String(tier1RatioPct) + "%" : "100%";
+      cap1.style.right = "";
       cap1.style.transform = "translateX(-50%)";
+      cap1.style.textAlign = "center";
       cap1.style.whiteSpace = "nowrap";
       cap1.style.maxWidth = "";
     }
     if (cap2) {
-      cap2.style.left = "";
-      cap2.style.right = "0";
-      cap2.style.transform = "none";
-      cap2.style.textAlign = "right";
+      cap2.style.left = "100%";
+      cap2.style.right = "";
+      cap2.style.transform = "translateX(-50%)";
+      cap2.style.textAlign = "center";
       cap2.style.whiteSpace = "nowrap";
       cap2.style.maxWidth = "";
     }
     if (cap1Label) {
-      cap1Label.textContent = tier1LabelText || tier1Label;
+      cap1Label.textContent = tier1LabelText || tier1Label || "Tier 1";
       cap1Label.style.color = p1.labelColor || tierHeadingColor;
       cap1Label.style.visibility = showTierLabels && showTier1Heading ? "visible" : "hidden";
     }
@@ -1349,7 +1348,7 @@
       cap1Price.style.visibility = showTierMinimums ? "visible" : "hidden";
     }
     if (cap2Label) {
-      cap2Label.textContent = tier2LabelText || tier2Label;
+      cap2Label.textContent = tier2LabelText || tier2Label || "Tier 2";
       cap2Label.style.color = p2.labelColor || tierHeadingColor;
       cap2Label.style.visibility = showTierLabels && showTier2Heading ? "visible" : "hidden";
     }

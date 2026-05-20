@@ -301,20 +301,17 @@ export const loader = async ({ request }) => {
     orderBy: [{ minSubtotal: "asc" }, { position: "asc" }],
   });
 
-  const inactiveDiscountNames = new Set(
+  const expiredDiscountNames = new Set(
     tierDiscounts
-      .filter((row) => {
-        const st = resolveDiscountStatus(row);
-        return st === "EXPIRED" || st === "INACTIVE";
-      })
+      .filter((row) => resolveDiscountStatus(row) === "EXPIRED")
       .map((row) => String(row.name || "").trim()),
   );
-  if (inactiveDiscountNames.size) {
+  if (expiredDiscountNames.size) {
     try {
       await prisma.thresholdTier.updateMany({
         where: {
           shop: session.shop,
-          discountName: { in: Array.from(inactiveDiscountNames) },
+          discountName: { in: Array.from(expiredDiscountNames) },
           active: true,
         },
         data: { active: false },

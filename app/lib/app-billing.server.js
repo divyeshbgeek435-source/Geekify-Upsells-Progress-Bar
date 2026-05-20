@@ -5,6 +5,10 @@ import {
   getPlanLimits,
   planDisplayName,
 } from "./app-plans.shared.js";
+import {
+  FREE_PLAN_DELETE_BLOCKED_MESSAGE,
+  canDeleteOnPlan,
+} from "./plan-delete-access.shared.js";
 
 /** Use test charges on dev stores unless explicitly disabled. */
 export function billingUsesTestMode() {
@@ -87,6 +91,16 @@ export async function countShopTierDiscounts(shop) {
 
 function upgradeMessage(resourceLabel, limit) {
   return `Your ${planDisplayName(APP_PLAN_ID.FREE)} plan allows up to ${limit} ${resourceLabel}. Upgrade to Premium for unlimited ${resourceLabel}.`;
+}
+
+/** Blocks delete intents on the Free plan (Premium / $5 plan required). */
+export function rejectIfDeleteNotAllowed(planId) {
+  if (canDeleteOnPlan(planId)) return null;
+  return {
+    ok: false,
+    error: FREE_PLAN_DELETE_BLOCKED_MESSAGE,
+    planUpgradeRequired: true,
+  };
 }
 
 /** @returns {"header" | "body" | null} */

@@ -13,6 +13,7 @@ import { authenticate } from "../shopify.server";
 import {
   loadShopBillingContext,
   rejectIfAnnouncementCreateBlocked,
+  rejectIfDeleteNotAllowed,
 } from "../lib/app-billing.server.js";
 import {
   loadAnnouncementHeaderAdminContext,
@@ -22,6 +23,11 @@ import {
 import { resolveSectionHtmlIdFromHeader } from "../lib/announcement-header-template.js";
 import { AnnouncementHeaderAdmin } from "./app.announcement-bars.jsx";
 import { AnnouncementBodyAdmin } from "./app.additional.jsx";
+import {
+  PlanGatedDeleteTooltip,
+  useBillingUpgradeHref,
+} from "../components/plan-gated-delete.jsx";
+import { getPlanLimits } from "../lib/app-plans.shared.js";
 
 export const loader = async ({ request }) => {
   const { session, billing } = await authenticate.admin(request);
@@ -89,10 +95,15 @@ export const action = async ({ request }) => {
   );
   if (limitErr) return limitErr;
 
+  if (String(form.get("intent") || "") === "delete") {
+    const deleteBlock = rejectIfDeleteNotAllowed(billingPlan.planId);
+    if (deleteBlock) return deleteBlock;
+  }
+
   return handleAnnouncementsUnifiedAction(session.shop, form);
 };
 
-function TypePickerModal({ open, onClose, onPickHeader, onPickBody }) {
+function TypePickerModal({ open, onClose, onPickHeader, onPickBody, headerDisabled, bodyDisabled }) {
   const ref = useRef(null);
   useEffect(() => {
     const el = ref.current;
@@ -119,11 +130,31 @@ function TypePickerModal({ open, onClose, onPickHeader, onPickBody }) {
         </h2>
         <p className="ann-type-sub">Choose the announcement type to open the matching editor.</p>
         <div className="ann-type-grid">
-          <button type="button" className="ann-type-card" onClick={onPickHeader}>
+          <button
+            type="button"
+            className="ann-type-card"
+            disabled={headerDisabled}
+            style={
+              headerDisabled
+                ? { opacity: 0.5, cursor: "not-allowed", pointerEvents: "none" }
+                : undefined
+            }
+            onClick={onPickHeader}
+          >
             <strong>Announcement bar</strong>
             <span>Header strip (app embed / header block)</span>
           </button>
-          <button type="button" className="ann-type-card" onClick={onPickBody}>
+          <button
+            type="button"
+            className="ann-type-card"
+            disabled={bodyDisabled}
+            style={
+              bodyDisabled
+                ? { opacity: 0.5, cursor: "not-allowed", pointerEvents: "none" }
+                : undefined
+            }
+            onClick={onPickBody}
+          >
             <strong>Announcement Section</strong>
             <span>Additional UI in cart / drawer</span>
           </button>
@@ -181,6 +212,8 @@ function UnifiedDeleteModal({ open, target, onClose, onConfirm }) {
 
 export default function AnnouncementsPage() {
   const { mergedRows, headerLoaderData, bodyLoaderData, billingPlan } = useLoaderData();
+  const canDeleteRecords = Boolean(billingPlan?.isPremium);
+  const billingUpgradeHref = useBillingUpgradeHref();
   const actionData = useActionData();
   const location = useLocation();
   const navigate = useNavigate();
@@ -217,6 +250,29 @@ export default function AnnouncementsPage() {
   );
   const pageEnd = Math.min(pageStart + paginatedRows.length, totalRecords);
 
+  const announcementLimits = useMemo(
+    () => getPlanLimits(billingPlan?.planId),
+    [billingPlan?.planId],
+  );
+  const headerAnnouncementCount = useMemo(
+    () => mergedRows.filter((r) => r.kind === "header").length,
+    [mergedRows],
+  );
+  const bodyAnnouncementCount = useMemo(
+    () => mergedRows.filter((r) => r.kind === "body").length,
+    [mergedRows],
+  );
+  const canCreateAnnouncementHeader = useMemo(() => {
+    const cap = announcementLimits.maxAnnouncementHeaders;
+    return cap == null || headerAnnouncementCount < cap;
+  }, [announcementLimits.maxAnnouncementHeaders, headerAnnouncementCount]);
+  const canCreateAnnouncementBody = useMemo(() => {
+    const cap = announcementLimits.maxAnnouncementBodies;
+    return cap == null || bodyAnnouncementCount < cap;
+  }, [announcementLimits.maxAnnouncementBodies, bodyAnnouncementCount]);
+  const canCreateAnyAnnouncement = canCreateAnnouncementHeader || canCreateAnnouncementBody;
+  const createLimitReached = !canCreateAnyAnnouncement;
+
   useEffect(() => {
     if (tablePage > totalPages) setTablePage(totalPages);
   }, [tablePage, totalPages]);
@@ -228,7 +284,7 @@ export default function AnnouncementsPage() {
   }, [actionData, navigate, withShopifyParams]);
 
   const confirmUnifiedDelete = useCallback(() => {
-    if (!deleteTarget) return;
+    if (!deleteTarget || !canDeleteRecords) return;
     const fd = new FormData();
     fd.set("intent", "delete");
     fd.set("recordKind", deleteTarget.kind === "header" ? "header" : "body");
@@ -236,7 +292,7 @@ export default function AnnouncementsPage() {
     else fd.set("rowId", deleteTarget.id);
     submit(fd, { method: "post" });
     setDeleteTarget(null);
-  }, [deleteTarget, submit]);
+  }, [canDeleteRecords, deleteTarget, submit]);
 
   return (
     <>
@@ -308,6 +364,8 @@ export default function AnnouncementsPage() {
       <TypePickerModal
         open={typePickerOpen}
         onClose={() => setTypePickerOpen(false)}
+        headerDisabled={!canCreateAnnouncementHeader}
+        bodyDisabled={!canCreateAnnouncementBody}
         onPickHeader={() => {
           setTypePickerOpen(false);
           navigate(withShopifyParams("/app/announcements?kind=header&create=1"));
@@ -354,7 +412,14 @@ export default function AnnouncementsPage() {
 
         {!billingPlan?.isPremium ? (
           <s-banner tone="info" heading={`${billingPlan.planName} plan`}>
-            Free includes 1 announcement header and 1 announcement Section.{" "}
+            {announcementLimits.maxAnnouncementHeaders != null &&
+            announcementLimits.maxAnnouncementBodies != null
+              ? `Your plan includes up to ${announcementLimits.maxAnnouncementHeaders} announcement header${
+                  announcementLimits.maxAnnouncementHeaders === 1 ? "" : "s"
+                } and up to ${announcementLimits.maxAnnouncementBodies} announcement Section${
+                  announcementLimits.maxAnnouncementBodies === 1 ? "" : "s"
+                }. `
+              : null}
             <s-link href={withShopifyParams("/app/billing")}>Upgrade to Premium</s-link> for
             unlimited announcements.
           </s-banner>
@@ -387,24 +452,58 @@ export default function AnnouncementsPage() {
                 <s-option value="50">50 / page</s-option>
               </s-select>
             </div>
-            <button
-              type="button"
+            <div
               style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 8,
-                padding: "8px 14px",
-                background: "rgb(0 123 96 / 10%)",
-                color: "rgb(0 123 96)",
-                border: "1px solid rgb(0 123 96 / 20%)",
-                borderRadius: 8,
-                fontWeight: 700,
-                cursor: "pointer",
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "flex-end",
+                gap: 6,
+                maxWidth: 360,
               }}
-              onClick={() => setTypePickerOpen(true)}
             >
-              + Create announcement
-            </button>
+              <button
+                type="button"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "8px 14px",
+                  background: createLimitReached
+                    ? "rgba(148, 163, 184, 0.15)"
+                    : "rgb(0 123 96 / 10%)",
+                  color: createLimitReached ? "#64748b" : "rgb(0 123 96)",
+                  border: createLimitReached
+                    ? "1px solid rgba(148, 163, 184, 0.35)"
+                    : "1px solid rgb(0 123 96 / 20%)",
+                  borderRadius: 8,
+                  fontWeight: 700,
+                  cursor: createLimitReached ? "not-allowed" : "pointer",
+                  opacity: createLimitReached ? 0.85 : 1,
+                }}
+                disabled={createLimitReached}
+                onClick={() => {
+                  if (!canCreateAnyAnnouncement) return;
+                  setTypePickerOpen(true);
+                }}
+              >
+                + Create announcement
+              </button>
+              {createLimitReached ? (
+                <p
+                  style={{
+                    margin: 0,
+                    fontSize: "0.8125rem",
+                    lineHeight: 1.45,
+                    color: "#64748b",
+                    textAlign: "right",
+                  }}
+                >
+                  You have reached your plan limit. Please upgrade your plan to create more
+                  announcements.{" "}
+                  <s-link href={withShopifyParams("/app/billing")}>Upgrade plan</s-link>
+                </p>
+              ) : null}
+            </div>
           </div>
 
           {mergedRows.length === 0 ? (
@@ -449,15 +548,28 @@ export default function AnnouncementsPage() {
                             navigate(withShopifyParams(`/app/announcements?${q}`));
                           }}
                         />
-                        <s-button
-                          type="button"
-                          variant="tertiary"
-                          tone="critical"
-                          icon="delete"
-                          onClick={() =>
-                            setDeleteTarget({ kind: row.kind, id: row.id, name: row.name })
-                          }
-                        />
+                        <PlanGatedDeleteTooltip
+                          canDelete={canDeleteRecords}
+                          upgradeHref={billingUpgradeHref}
+                        >
+                          <s-button
+                            type="button"
+                            variant="tertiary"
+                            tone="critical"
+                            icon="delete"
+                            disabled={!canDeleteRecords}
+                            onClick={
+                              canDeleteRecords
+                                ? () =>
+                                    setDeleteTarget({
+                                      kind: row.kind,
+                                      id: row.id,
+                                      name: row.name,
+                                    })
+                                : undefined
+                            }
+                          />
+                        </PlanGatedDeleteTooltip>
                       </s-stack>
                     </s-table-cell>
                   </s-table-row>

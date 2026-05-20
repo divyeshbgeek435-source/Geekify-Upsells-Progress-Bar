@@ -5,6 +5,11 @@ import {
   shopVariantsForLookup,
 } from "../lib/app-proxy.server.js";
 import { mergeProgressBarDesign } from "../lib/progress-bar-design.js";
+import {
+  resolveDiscountStatus,
+  resolveTierCaptionLabels,
+  resolveTierStatus,
+} from "../lib/tier-display.shared.js";
 
 const lastPingLogAtByShop = new Map();
 
@@ -40,32 +45,6 @@ function tierMinMinorUnits(minSubtotalMajor, exp) {
   const n = Number(minSubtotalMajor || 0);
   if (!Number.isFinite(n) || n < 0) return 0;
   return Math.round(n * 10 ** exp);
-}
-
-function parseDateInput(value) {
-  if (!value) return null;
-  const d = value instanceof Date ? value : new Date(value);
-  return Number.isNaN(d.getTime()) ? null : d;
-}
-
-function resolveTierStatus(tier, now = new Date()) {
-  if (!tier) return "INACTIVE";
-  if (tier.active === false) return "INACTIVE";
-  const start = parseDateInput(tier.scheduleStartAt);
-  const end = parseDateInput(tier.scheduleEndAt);
-  if (start && now < start) return "SCHEDULED";
-  if (end && now > end) return "EXPIRED";
-  return "ACTIVE";
-}
-
-function resolveDiscountStatus(discount, now = new Date()) {
-  if (!discount) return "INACTIVE";
-  const start = parseDateInput(discount.scheduleStartAt);
-  const end = parseDateInput(discount.scheduleEndAt);
-  if (end && now > end) return "EXPIRED";
-  if (start && now < start) return "SCHEDULED";
-  if (discount.active === false) return "INACTIVE";
-  return "ACTIVE";
 }
 
 function isUnknownPrismaArgument(error, fieldName) {
@@ -193,6 +172,7 @@ export const loader = async ({ request }) => {
   const visibleTiers = eligibleTiers
     .map((tier) => ({ ...tier, status: resolveTierStatus(tier, now) }))
     .filter((tier) => tier.status === "ACTIVE");
+  const tierCaptionLabels = resolveTierCaptionLabels(visibleTiers);
   let widgetDynamicConfig = {};
   try {
     const rawDynamic =
@@ -249,12 +229,8 @@ export const loader = async ({ request }) => {
     widgetUseCustomColors: Boolean(
       tierWidgetSettings?.widgetUseCustomColors ?? false,
     ),
-    tier1LabelText:
-      tierWidgetSettings?.tier1LabelText ||
-      "Discount",
-    tier2LabelText:
-      tierWidgetSettings?.tier2LabelText ||
-      "Free shipping",
+    tier1LabelText: tierCaptionLabels.tier1LabelText,
+    tier2LabelText: tierCaptionLabels.tier2LabelText,
     minAmountPrefixText:
       tierWidgetSettings?.minAmountPrefixText ||
       "Min.",

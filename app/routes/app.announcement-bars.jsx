@@ -2483,6 +2483,7 @@ import {
   useLocation,
   useNavigate,
   useRouteError,
+  useOutletContext,
   useSubmit,
 } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
@@ -2500,6 +2501,14 @@ import {
   loadAnnouncementHeaderAdminContext,
   handleAnnouncementHeaderAdminAction,
 } from "../lib/announcements-admin.server.js";
+import {
+  loadShopBillingContext,
+  rejectIfDeleteNotAllowed,
+} from "../lib/app-billing.server.js";
+import {
+  PlanGatedDeleteTooltip,
+  useBillingUpgradeHref,
+} from "../components/plan-gated-delete.jsx";
 
 const useIsomorphicLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
 const ANNOUNCEMENT_STYLE_PRESETS = [
@@ -3873,8 +3882,13 @@ export const loader = async ({ request }) => {
 };
 
 export const action = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
+  const { session, billing } = await authenticate.admin(request);
+  const billingPlan = await loadShopBillingContext(billing);
   const form = await request.formData();
+  if (String(form.get("intent") || "") === "delete") {
+    const deleteBlock = rejectIfDeleteNotAllowed(billingPlan.planId);
+    if (deleteBlock) return deleteBlock;
+  }
   return handleAnnouncementHeaderAdminAction(session.shop, form);
 };
 
@@ -3885,6 +3899,9 @@ export function AnnouncementHeaderAdmin({
   navigateQueryStyle = "standalone",
 }) {
   const { shop, bars, editingBar, pendingHeaderCreate } = loaderData;
+  const { billingPlan } = useOutletContext() || {};
+  const canDeleteRecords = Boolean(billingPlan?.isPremium);
+  const billingUpgradeHref = useBillingUpgradeHref();
   const actionData = useActionData();
   const location = useLocation();
   const navigate = useNavigate();
@@ -4298,7 +4315,7 @@ export function AnnouncementHeaderAdmin({
         barName={deleteTarget?.name || ""}
         onClose={() => setDeleteTarget(null)}
         onConfirm={() => {
-          if (!deleteTarget?.id) return;
+          if (!canDeleteRecords || !deleteTarget?.id) return;
           const fd = new FormData();
           fd.set("intent", "delete");
           fd.set("id", deleteTarget.id);
@@ -4414,14 +4431,23 @@ export function AnnouncementHeaderAdmin({
                       >
                         Copy Section ID
                       </s-button> */}
-                      <s-button
-                        type="button"
-                        variant="tertiary"
-                        tone="critical"
-                        icon="delete"
-                        onClick={() => setDeleteTarget({ id: b.id, name: b.name })}
-                 >
-                      </s-button>
+                      <PlanGatedDeleteTooltip
+                        canDelete={canDeleteRecords}
+                        upgradeHref={billingUpgradeHref}
+                      >
+                        <s-button
+                          type="button"
+                          variant="tertiary"
+                          tone="critical"
+                          icon="delete"
+                          disabled={!canDeleteRecords}
+                          onClick={
+                            canDeleteRecords
+                              ? () => setDeleteTarget({ id: b.id, name: b.name })
+                              : undefined
+                          }
+                        />
+                      </PlanGatedDeleteTooltip>
                     </s-stack>
                   </s-table-cell>
                 </s-table-row>

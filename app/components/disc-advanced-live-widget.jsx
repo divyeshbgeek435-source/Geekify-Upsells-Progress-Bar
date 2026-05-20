@@ -66,8 +66,6 @@ export function DiscAdvancedLiveWidget({
   sequentialMsg2,
   barFillColor,
   barTrackColor,
-  iconBackgroundColor,
-  iconTextColor,
   showTierIcons,
   tier1Icon,
   tier2Icon,
@@ -121,7 +119,7 @@ export function DiscAdvancedLiveWidget({
   const badgeSize = Number(bs.badgeSizePx) > 0 ? Number(bs.badgeSizePx) : 46;
   const barH = Number(bs.barHeightPx) > 0 ? Number(bs.barHeightPx) : 10;
   const br = Number(bs.barBorderRadiusPx) >= 0 ? Number(bs.barBorderRadiusPx) : 999;
-  const capGap = Number(bs.captionGapPx) >= 0 ? Number(bs.captionGapPx) : 8;
+  const capGap = Number(bs.captionGapPx) >= 0 ? Number(bs.captionGapPx) : 18;
   const transMs = Number(bs.transitionMs) >= 0 ? Number(bs.transitionMs) : 280;
   const hoverSc = Number(bs.badgeHoverScalePercent) >= 100 ? Number(bs.badgeHoverScalePercent) / 100 : 1.04;
   const barMax = Number(bs.barMaxWidthPx) > 0 ? `${bs.barMaxWidthPx}px` : "100%";
@@ -130,12 +128,12 @@ export function DiscAdvancedLiveWidget({
   const barInset = Math.ceil(badgeSize / 2) + 4;
   const brStr = br >= 999 ? "999px" : `${br}px`;
 
-  const badgeStyle = (phase, fallbackBg, fallbackFg) => ({
+  const badgeStyle = (phase) => ({
     width: badgeSize,
     height: badgeSize,
-    background: phase?.badgeBackgroundColor || fallbackBg,
-    color: phase?.iconColor || fallbackFg,
-    border: `2px solid ${phase?.badgeBorderColor || "#000000"}`,
+    background: phase?.badgeBackgroundColor || "#ffffff",
+    color: phase?.iconColor || "#000000",
+    border: "none",
     boxShadow: phase?.badgeShadow || "none",
     fontSize: phase?.iconSizePx ? `${phase.iconSizePx}px` : `${Math.max(12, Math.round(badgeSize * 0.33))}px`,
     transition: `background ${transMs}ms ease, color ${transMs}ms ease, box-shadow ${transMs}ms ease, transform 0.2s ease`,
@@ -204,7 +202,7 @@ export function DiscAdvancedLiveWidget({
         borderRadius: 12,
         border: "1px solid",
         padding: "12px 14px",
-        overflow: "hidden",
+        overflow: "visible",
       }}
     >
       <div ref={canvasRef} className="disc-live-front-canvas">
@@ -220,11 +218,8 @@ export function DiscAdvancedLiveWidget({
           </div>
         ) : null}
 
-        {/* Bar + badges + captions block */}
-        <div style={{ maxWidth: barMax, margin: "0 auto" }}>
-          {/* This container is position:relative. Its width = track width.
-              Badges at left:0% and left:100% sit at its edges.
-              The outer margins give room so badges don't clip the card. */}
+        {/* Bar + badges + captions — shared horizontal inset so % positions match */}
+        <div className="disc-live-progress-rail" style={{ maxWidth: barMax, margin: "0 auto" }}>
           <div
             className="disc-live-bar-zone"
             style={{
@@ -232,14 +227,19 @@ export function DiscAdvancedLiveWidget({
               marginLeft: barInset,
               marginRight: barInset,
               marginTop: mt,
-              marginBottom: capGap + 4,
+              marginBottom: 0,
+              height: badgeSize,
             }}
           >
             {/* Track */}
             <div
               className="disc-live-bar-track"
               style={{
-                position: "relative",
+                position: "absolute",
+                left: 0,
+                right: 0,
+                top: "50%",
+                transform: "translateY(-50%)",
                 height: barH,
                 borderRadius: brStr,
                 background: resolvedBarTrack,
@@ -268,7 +268,7 @@ export function DiscAdvancedLiveWidget({
                 left: badge1Left,
                 transform: "translate(-50%, -50%)",
                 display: showTierIcons ? "inline-flex" : "none",
-                ...badgeStyle(p1, iconBackgroundColor, iconTextColor),
+                ...badgeStyle(p1),
               }}
               onMouseEnter={(e) => {
                 e.currentTarget.style.transform = `translate(-50%, -50%) scale(${hoverSc})`;
@@ -290,7 +290,7 @@ export function DiscAdvancedLiveWidget({
                   left: badge2Left,
                   transform: "translate(-50%, -50%)",
                   display: showTierIcons ? "inline-flex" : "none",
-                  ...badgeStyle(p2, iconBackgroundColor, iconTextColor),
+                  ...badgeStyle(p2),
                 }}
                 onMouseEnter={(e) => {
                   e.currentTarget.style.transform = `translate(-50%, -50%) scale(${hoverSc})`;
@@ -304,22 +304,28 @@ export function DiscAdvancedLiveWidget({
             ) : null}
           </div>
 
-          {/* Captions - same margins as bar-zone so left% aligns with badges */}
+          {/* Captions — same inset as bar zone for identical % positioning */}
           <div
+            className="disc-live-tier-captions-rail"
             style={{
               position: "relative",
               marginLeft: barInset,
               marginRight: barInset,
+              marginTop: capGap,
               minHeight: 36,
             }}
           >
             {/* Tier 1 caption */}
             <div
+              className="disc-live-tier-cap"
               style={{
                 position: "absolute",
                 top: 0,
                 left: badge1Left,
                 transform: "translateX(-50%)",
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
                 textAlign: "center",
                 whiteSpace: "nowrap",
               }}
@@ -330,8 +336,10 @@ export function DiscAdvancedLiveWidget({
                 color: labelCol(p1),
                 visibility: showTierLabels && showTier1Heading ? "visible" : "hidden",
                 lineHeight: 1.3,
+                width: "100%",
+                textAlign: "center",
               }}>
-                {tier1LabelText || "Discount"}
+                {tier1LabelText || "Tier 1"}
               </div>
               <div style={{
                 fontWeight: 500,
@@ -340,6 +348,8 @@ export function DiscAdvancedLiveWidget({
                 marginTop: 2,
                 visibility: showTierMinimums ? "visible" : "hidden",
                 lineHeight: 1.35,
+                width: "100%",
+                textAlign: "center",
               }}>
                 {min1}
               </div>
@@ -348,11 +358,15 @@ export function DiscAdvancedLiveWidget({
             {/* Tier 2 caption */}
             {hasTwoTiers ? (
               <div
+                className="disc-live-tier-cap"
                 style={{
                   position: "absolute",
                   top: 0,
                   left: badge2Left,
                   transform: "translateX(-50%)",
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
                   textAlign: "center",
                   whiteSpace: "nowrap",
                 }}
@@ -363,8 +377,10 @@ export function DiscAdvancedLiveWidget({
                   color: labelCol(p2),
                   visibility: showTierLabels && showTier2Heading ? "visible" : "hidden",
                   lineHeight: 1.3,
+                  width: "100%",
+                  textAlign: "center",
                 }}>
-                  {tier2LabelText || "Free shipping"}
+                  {tier2LabelText || "Tier 2"}
                 </div>
                 <div style={{
                   fontWeight: 500,
@@ -373,6 +389,8 @@ export function DiscAdvancedLiveWidget({
                   marginTop: 2,
                   visibility: showTierMinimums ? "visible" : "hidden",
                   lineHeight: 1.35,
+                  width: "100%",
+                  textAlign: "center",
                 }}>
                   {min2}
                 </div>

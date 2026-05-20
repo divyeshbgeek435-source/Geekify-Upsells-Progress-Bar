@@ -63,7 +63,7 @@ const TIER_ROWS = [
 
 ];
 
-function TierComparisonTable({ tier, tierLabel, beforeData, afterData, onPatch, onCopyTier1 }) {
+function TierComparisonTable({ tier, tierLabel, beforeData, afterData, onPatch, onCopyTier1, rows = TIER_ROWS }) {
   const b = beforeData || {};
   const a = afterData || {};
   return (
@@ -82,7 +82,7 @@ function TierComparisonTable({ tier, tierLabel, beforeData, afterData, onPatch, 
           <div className="disc-tier-table-th" role="columnheader">Before</div>
           <div className="disc-tier-table-th" role="columnheader">After</div>
         </div>
-        {TIER_ROWS.map((row) => (
+        {rows.map((row) => (
           <div className="disc-tier-table-row" role="row" key={row.key}>
             <div className="disc-tier-table-td disc-tier-table-td--label" role="cell">{row.label}</div>
             <div className="disc-tier-table-td" role="cell">
@@ -110,7 +110,22 @@ function TierComparisonTable({ tier, tierLabel, beforeData, afterData, onPatch, 
   );
 }
 
-export function ProgressBarStyleEditor({ barStyle, onPatchRoot, onPatchPhase, onResetDefaults }) {
+const BADGE_BG_ROWS = TIER_ROWS.filter((row) =>
+  ["badgeBackgroundColor", "iconColor"].includes(row.key),
+);
+
+export function ProgressBarStyleEditor({
+  barStyle,
+  onPatchRoot,
+  onPatchPhase,
+  onResetDefaults,
+  tier1Name = "Tier 1",
+  tier2Name = "Tier 2",
+  mode = "full",
+  showTitle = true,
+}) {
+  const badgeOnly = mode === "badgeOnly";
+  const visibleRows = badgeOnly ? BADGE_BG_ROWS : TIER_ROWS;
   const bs = barStyle && typeof barStyle === "object" ? barStyle : defaultBarStyle();
 
   const copyTier1ToTier2 = () => {
@@ -118,7 +133,7 @@ export function ProgressBarStyleEditor({ barStyle, onPatchRoot, onPatchPhase, on
     const t1a = bs.tier1?.after || {};
     const beforePatch = {};
     const afterPatch = {};
-    TIER_ROWS.forEach((row) => {
+    visibleRows.forEach((row) => {
       if (t1b[row.key] != null) beforePatch[row.key] = t1b[row.key];
       if (t1a[row.key] != null) afterPatch[row.key] = t1a[row.key];
     });
@@ -128,16 +143,23 @@ export function ProgressBarStyleEditor({ barStyle, onPatchRoot, onPatchPhase, on
 
   return (
     <div className="disc-bar-style-editor">
-      <div className="disc-bar-style-editor-head">
-        <span className="disc-bar-style-editor-title">Progress bar and badges</span>
+      <div className={`disc-bar-style-editor-head${showTitle ? "" : " disc-bar-style-editor-head--compact"}`}>
+        {showTitle ? (
+          <span className="disc-bar-style-editor-title">
+            {badgeOnly ? "Badge styling" : "Progress bar and badges"}
+          </span>
+        ) : null}
         <button type="button" className="disc-close-btn disc-bar-style-reset" onClick={onResetDefaults}>
           Reset defaults
         </button>
       </div>
       <p className="disc-bar-style-editor-help">
-        Horizontal bar with scalloped tier badges. "Before" applies until the shopper reaches a tier "After" once reached.
+        {badgeOnly
+          ? "Set badge background and icon colors per tier. Before = not yet reached; After = unlocked."
+          : "Horizontal bar with scalloped tier badges. \"Before\" applies until the shopper reaches a tier \"After\" once reached."}
       </p>
 
+      {!badgeOnly ? (
       <div className="disc-bar-style-global">
         <div className="disc-bar-style-phase-title">Layout and motion</div>
         <div className="disc-layout-grid">
@@ -163,7 +185,7 @@ export function ProgressBarStyleEditor({ barStyle, onPatchRoot, onPatchPhase, on
           </label>
           <label className="disc-layout-field">
             <span>Caption gap</span>
-            <input type="number" min={0} max={28} className="disc-layout-input" value={bs.captionGapPx ?? 8} onChange={(e) => onPatchRoot({ captionGapPx: Number(e.currentTarget.value) || 8 })} />
+            <input type="number" min={0} max={28} className="disc-layout-input" value={bs.captionGapPx ?? 18} onChange={(e) => onPatchRoot({ captionGapPx: Number(e.currentTarget.value) || 18 })} />
             <span className="disc-layout-unit">px</span>
           </label>
           <label className="disc-layout-field">
@@ -178,21 +200,24 @@ export function ProgressBarStyleEditor({ barStyle, onPatchRoot, onPatchPhase, on
           </label>
         </div>
       </div>
+      ) : null}
 
       <TierComparisonTable
         tier="tier1"
-        tierLabel="Tier 1 - Discount"
+        tierLabel={tier1Name}
         beforeData={bs.tier1?.before}
         afterData={bs.tier1?.after}
         onPatch={onPatchPhase}
+        rows={visibleRows}
       />
       <TierComparisonTable
         tier="tier2"
-        tierLabel="Tier 2 - Free Shipping"
+        tierLabel={tier2Name}
         beforeData={bs.tier2?.before}
         afterData={bs.tier2?.after}
         onPatch={onPatchPhase}
         onCopyTier1={copyTier1ToTier2}
+        rows={visibleRows}
       />
     </div>
   );

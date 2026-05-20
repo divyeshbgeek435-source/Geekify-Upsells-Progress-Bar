@@ -3726,6 +3726,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Form, useActionData, useFetcher, useLoaderData, useRevalidator, useSearchParams } from "react-router";
 import {
+  PlanGatedDeleteTooltip,
+  useBillingUpgradeHref,
+} from "../components/plan-gated-delete.jsx";
+import {
   defaultPopupDesignConfig,
   generatePopupDesignId,
   parsePopupDesignConfig,
@@ -3746,6 +3750,7 @@ import {
 import { authenticate } from "../shopify.server";
 import {
   loadShopBillingContext,
+  rejectIfDeleteNotAllowed,
   rejectIfPopupLimitReached,
 } from "../lib/app-billing.server.js";
 import { getPlanLimits } from "../lib/app-plans.shared.js";
@@ -3977,6 +3982,8 @@ export const action = async ({ request }) => {
   }
 
   if (intent === "delete") {
+    const deleteBlock = rejectIfDeleteNotAllowed(billingPlan.planId);
+    if (deleteBlock) return deleteBlock;
     const rowId = String(form.get("rowId") || "").trim();
     const existing = await prisma.popupDesign.findFirst({ where: { id: rowId, shop }, select: { id: true } });
     if (!existing) return { ok: false, error: "Popup not found." };
@@ -4204,6 +4211,8 @@ function hydrateFromConfig(c) {
 // ─── Main component ───────────────────────────────────────────────────────────
 export default function PopupDesignPage() {
   const { popups, billingPlan } = useLoaderData();
+  const canDeleteRecords = Boolean(billingPlan?.isPremium);
+  const billingUpgradeHref = useBillingUpgradeHref();
   const actionData = useActionData();
   const fetcher = useFetcher();
   const revalidator = useRevalidator();
@@ -5040,18 +5049,23 @@ export default function PopupDesignPage() {
   > 
   </s-button>
 
-  <s-button
-    type="button"
-    variant="secondary"
-    tone="critical"
-    icon="delete"
-    disabled={fetcher.state !== "idle"}
-    onClick={() => {
-      setDeleteConfirmExiting(false);
-      setDeleteConfirm({ id: p.id });
-    }}
-  > 
-  </s-button>
+  <PlanGatedDeleteTooltip canDelete={canDeleteRecords} upgradeHref={billingUpgradeHref}>
+    <s-button
+      type="button"
+      variant="secondary"
+      tone="critical"
+      icon="delete"
+      disabled={!canDeleteRecords || fetcher.state !== "idle"}
+      onClick={
+        canDeleteRecords
+          ? () => {
+              setDeleteConfirmExiting(false);
+              setDeleteConfirm({ id: p.id });
+            }
+          : undefined
+      }
+    />
+  </PlanGatedDeleteTooltip>
 </div>
                             </td>
                           </tr>

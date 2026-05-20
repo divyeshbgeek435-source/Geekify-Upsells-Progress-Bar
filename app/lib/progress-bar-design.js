@@ -52,7 +52,7 @@ export function defaultBarStyle() {
     barSectionMarginTopPx: 30,
     barSectionMarginBottomPx: 6,
     badgeSizePx: 46,
-    captionGapPx: 8,
+    captionGapPx: 18,
     transitionMs: 280,
     badgeHoverScalePercent: 104,
     tier1: {
@@ -74,6 +74,14 @@ function mergeTierPhases(base, raw) {
   };
 }
 
+function normalizeCaptionGapPx(raw, fallback) {
+  const v = Number(raw);
+  if (!Number.isFinite(v) || v < 0) return fallback;
+  // Legacy default was 8px; use 18px spacing under tier badges.
+  if (v === 8) return 18;
+  return v;
+}
+
 export function mergeProgressBarDesign(raw) {
   let parsed = {};
   if (raw && typeof raw === "object") parsed = raw;
@@ -93,6 +101,7 @@ export function mergeProgressBarDesign(raw) {
     barStyle: {
       ...defBar,
       ...rawBar,
+      captionGapPx: normalizeCaptionGapPx(rawBar.captionGapPx, defBar.captionGapPx),
       tier1: mergeTierPhases(defBar.tier1, rawBar.tier1),
       tier2: mergeTierPhases(defBar.tier2, rawBar.tier2),
     },

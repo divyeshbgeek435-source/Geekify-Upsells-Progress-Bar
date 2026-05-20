@@ -12765,6 +12765,7 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import {
   loadShopBillingContext,
+  rejectIfDeleteNotAllowed,
   rejectIfDiscountLimitReached,
 } from "../lib/app-billing.server.js";
 import { PREMIUM_PLAN_PRICE_USD } from "../lib/app-plans.shared.js";
@@ -12783,7 +12784,17 @@ import {
   sanitizeProgressBarDesignForDb,
 } from "../components/disc-advanced-live-widget.jsx";
 import { ProgressBarStyleEditor } from "../components/disc-progress-bar-style-editor.jsx";
+import {
+  PlanGatedDeleteTooltip,
+  useBillingUpgradeHref,
+} from "../components/plan-gated-delete.jsx";
 import { defaultBarStyle } from "../lib/progress-bar-design.js";
+import {
+  resolveEligibleActiveTiers,
+  resolveLiveWidgetProgress,
+  resolveTierCaptionLabels,
+  resolveWidgetPreviewMins,
+} from "../lib/tier-display.shared.js";
 
 const DISC_TIER_METRIC_ICON_BADGE_STYLE = {
   marginLeft: "auto",
@@ -12801,6 +12812,12 @@ const DISC_TIER_METRIC_ICON_COLOR = {
   color: "rgb(0 123 96)",
   fill: "rgb(0 123 96)",
 };
+
+const WIDGET_SETTINGS_TABS = [
+  { id: "progress", label: "Progress bar and badges" },
+  { id: "messages", label: "Messages and Labels" },
+  { id: "visibility", label: "Visibility Controls" },
+];
 
 // ─── GraphQL ────────────────────────────────────────────────────────────────
 
@@ -13714,20 +13731,17 @@ export const loader = async ({ request }) => {
     where: { shop: session.shop },
     orderBy: [{ minSubtotal: "asc" }, { position: "asc" }],
   });
-  const inactiveDiscountNames = new Set(
+  const expiredDiscountNames = new Set(
     tierDiscounts
-      .filter((row) => {
-        const st = resolveDiscountStatus(row);
-        return st === "EXPIRED" || st === "INACTIVE";
-      })
+      .filter((row) => resolveDiscountStatus(row) === "EXPIRED")
       .map((row) => String(row.name || "").trim()),
   );
-  if (inactiveDiscountNames.size) {
+  if (expiredDiscountNames.size) {
     try {
       await prisma.thresholdTier.updateMany({
         where: {
           shop: session.shop,
-          discountName: { in: Array.from(inactiveDiscountNames) },
+          discountName: { in: Array.from(expiredDiscountNames) },
           active: true,
         },
         data: { active: false },
@@ -13788,6 +13802,10 @@ export const action = async ({ request }) => {
   const formData = await request.formData();
   const intent = String(formData.get("intent") || "");
   const id = String(formData.get("id") || "");
+  if (intent === "delete" || intent === "discount-delete" || intent === "tier-delete") {
+    const deleteBlock = rejectIfDeleteNotAllowed(billingPlan.planId);
+    if (deleteBlock) return deleteBlock;
+  }
   const modeRaw = String(formData.get("mode") || "code").trim().toLowerCase();
   const mode = modeRaw === "custom" ? "custom" : "code";
   const discountType = String(formData.get("discountType") || "");
@@ -13855,7 +13873,83 @@ export const action = async ({ request }) => {
     }));
   };
 
-  if (intent === "discount-upsert" || intent === "discount-toggle-active") {
+  if (intent === "discount-toggle-active") {
+    const discountName = String(formData.get("discountName") || "").trim();
+    if (!discountName) {
+      return { ok: false, errors: { discountName: "Discount name is required" } };
+    }
+    const discountActive = formData.has("discountActive");
+    let existingRow = null;
+    if (typeof prisma.tierDiscount?.findUnique === "function") {
+      try {
+        existingRow = await prisma.tierDiscount.findUnique({
+          where: { shop_name: { shop: session.shop, name: discountName } },
+        });
+      } catch (error) {
+        if (!isMissingTableError(error, "TierDiscount")) throw error;
+      }
+    }
+    const scheduleStartAt = parseTierDate(existingRow?.scheduleStartAt);
+    const scheduleEndAt = parseTierDate(existingRow?.scheduleEndAt);
+    if (discountActive) {
+      const existingWindows = await listExistingDiscountWindows();
+      const hasConflict = existingWindows.some((row) => {
+        const rowName = String(row.name || "").trim();
+        if (!row.active) return false;
+        if (rowName === discountName) return false;
+        return rangesOverlap(
+          scheduleStartAt,
+          scheduleEndAt,
+          row.scheduleStartAt,
+          row.scheduleEndAt,
+        );
+      });
+      if (hasConflict) {
+        return {
+          ok: false,
+          errors: {
+            discountActive:
+              "Only one discount can be active at a time. Please change the schedule.",
+          },
+        };
+      }
+    }
+    let persistedToTierDiscount = false;
+    if (typeof prisma.tierDiscount?.upsert === "function") {
+      try {
+        await prisma.tierDiscount.upsert({
+          where: { shop_name: { shop: session.shop, name: discountName } },
+          create: {
+            shop: session.shop,
+            name: discountName,
+            active: discountActive,
+            scheduleStartAt,
+            scheduleEndAt,
+          },
+          update: { active: discountActive },
+        });
+        persistedToTierDiscount = true;
+      } catch (error) {
+        if (!isMissingTableError(error, "TierDiscount")) throw error;
+      }
+    }
+    if (!persistedToTierDiscount) {
+      try {
+        await prisma.thresholdTier.updateMany({
+          where: { shop: session.shop, discountName },
+          data: { active: discountActive },
+        });
+      } catch (error) {
+        if (!isUnknownPrismaArgument(error, "discountName")) throw error;
+      }
+    }
+    const syncableTiers = await getSyncableTiers();
+    const syncResult = await syncAutoTierDiscount(admin, syncableTiers);
+    if (!syncResult.ok) return { ok: false, errors: { tier: syncResult.error } };
+    return { ok: true, tierIntent: intent };
+  }
+
+  if (intent === "discount-upsert") {
     const discountName = String(formData.get("discountName") || "").trim();
     const originalDiscountName = String(formData.get("originalDiscountName") || "").trim();
     const scheduleLock = await getPersistedDiscountScheduleLock(session.shop, [
@@ -14278,8 +14372,6 @@ export const action = async ({ request }) => {
     const widgetTextColor = String(formData.get("widgetTextColor") ?? "").trim();
     const widgetBorderColor = String(formData.get("widgetBorderColor") ?? "").trim();
     const widgetUseCustomColors = String(formData.get("widgetUseCustomColors") ?? "") === "on";
-    const tier1LabelText = String(formData.get("tier1LabelText") ?? "").trim();
-    const tier2LabelText = String(formData.get("tier2LabelText") ?? "").trim();
     const minAmountPrefixText = String(formData.get("minAmountPrefixText") ?? "").trim();
     const showTierIcons = String(formData.get("showTierIcons") ?? "") === "on";
     const showTierLabels = String(formData.get("showTierLabels") ?? "") === "on";
@@ -14359,8 +14451,6 @@ export const action = async ({ request }) => {
       tierSubheadingColor: normalizeColor(tierSubheadingColor, "#334155"),
       hintColor: normalizeColor(hintColor, "#64748b"),
     });
-    if (!tier1LabelText) widgetErrors.tier1LabelText = "Tier 1 label is required";
-    if (!tier2LabelText) widgetErrors.tier2LabelText = "Tier 2 label is required";
     if (!minAmountPrefixText) widgetErrors.minAmountPrefixText = "Min amount prefix is required";
     if (!selectorTargets) widgetErrors.selectorTargets = "Target selectors are required";
     if (!nameTargetSelectors) widgetErrors.nameTargetSelectors = "Name target selectors are required";
@@ -14392,8 +14482,6 @@ export const action = async ({ request }) => {
           widgetTextColor: normalizedWidgetTextColor,
           widgetBorderColor: normalizedWidgetBorderColor,
           widgetUseCustomColors,
-          tier1LabelText,
-          tier2LabelText,
           minAmountPrefixText,
           showTierIcons,
           showTierLabels,
@@ -14418,8 +14506,6 @@ export const action = async ({ request }) => {
           widgetTextColor: normalizedWidgetTextColor,
           widgetBorderColor: normalizedWidgetBorderColor,
           widgetUseCustomColors,
-          tier1LabelText,
-          tier2LabelText,
           minAmountPrefixText,
           showTierIcons,
           showTierLabels,
@@ -14930,7 +15016,7 @@ function SetupStatusCard({ step1Label, step2Label, step3Label }) {
 
 // ─── Tier Card ───────────────────────────────────────────────────────────────
 
-function TierCard({ tier, position, onEdit, onDelete }) {
+function TierCard({ tier, position, onEdit, onDelete, canDelete, upgradeHref }) {
   const rewardType = String(tier.rewardType || "").toUpperCase();
   const icon = REWARD_ICONS[rewardType] || "🎁";
   const label = REWARD_LABELS[rewardType] || rewardType;
@@ -15018,23 +15104,27 @@ function TierCard({ tier, position, onEdit, onDelete }) {
         >
           Edit
         </button>
-        <button
-          type="button"
-          onClick={onDelete}
-          style={{
-            padding: "5px 12px",
-            borderRadius: 6,
-            border: "1px solid #fca5a5",
-            background: "#fff",
-            color: "#dc2626",
-            fontSize: 12,
-            fontWeight: 500,
-            cursor: "pointer",
-            transition: "all 0.15s",
-          }}
-        >
-          Delete
-        </button>
+        <PlanGatedDeleteTooltip canDelete={canDelete} upgradeHref={upgradeHref}>
+          <button
+            type="button"
+            onClick={canDelete ? onDelete : undefined}
+            disabled={!canDelete}
+            style={{
+              padding: "5px 12px",
+              borderRadius: 6,
+              border: "1px solid #fca5a5",
+              background: "#fff",
+              color: "#dc2626",
+              fontSize: 12,
+              fontWeight: 500,
+              cursor: canDelete ? "pointer" : "not-allowed",
+              opacity: canDelete ? 1 : 0.55,
+              transition: "all 0.15s",
+            }}
+          >
+            Delete
+          </button>
+        </PlanGatedDeleteTooltip>
       </div>
     </div>
   );
@@ -15055,7 +15145,39 @@ function OverviewCreateButton({ onClick, children, disabled, disabledTitle }) {
   );
 }
 
-function DiscountOverviewRow({ group, totalDiscountUsageCount, onConfigure, onDelete }) {
+function DiscountStorefrontToggle({ active, onChange, disabled }) {
+  return (
+    <label
+      className={`disc-storefront-toggle${active ? " is-on" : ""}${disabled ? " is-disabled" : ""}`}
+      title={active ? "Visible on storefront" : "Hidden on storefront"}
+    >
+      <input
+        type="checkbox"
+        checked={active}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+        aria-label={active ? "Storefront visibility on" : "Storefront visibility off"}
+      />
+      <span className="disc-storefront-toggle-track" aria-hidden="true">
+        <span className="disc-storefront-toggle-thumb" />
+      </span>
+      <span className="disc-storefront-toggle-text">{active ? "On" : "Off"}</span>
+    </label>
+  );
+}
+
+function DiscountOverviewRow({
+  group,
+  totalDiscountUsageCount,
+  onConfigure,
+  onDelete,
+  onToggleActive,
+  suppressStorefrontActive,
+  canDelete,
+  upgradeHref,
+}) {
+  const storefrontActive =
+    suppressStorefrontActive ? false : group.discountActive !== false;
   return (
     <tr key={group.discountName}>
       <td>
@@ -15069,6 +15191,13 @@ function DiscountOverviewRow({ group, totalDiscountUsageCount, onConfigure, onDe
             ))}
           </div>
         )}
+      </td>
+      <td className="disc-overview-storefront-active">
+        <DiscountStorefrontToggle
+          active={storefrontActive}
+          disabled={!onToggleActive}
+          onChange={(next) => onToggleActive?.(next)}
+        />
       </td>
       <td>
         <span style={statusBadgeStyle(group.discountStatus)}>
@@ -15096,16 +15225,17 @@ function DiscountOverviewRow({ group, totalDiscountUsageCount, onConfigure, onDe
             onClick={onConfigure}>
 
           </s-button>
-          <s-button
-            type="button"
-            variant="danger"
-            icon="delete"
-            className="disc-delete-icon"
-                tone="critical"
-            onClick={onDelete}
-          >
-
-          </s-button>
+          <PlanGatedDeleteTooltip canDelete={canDelete} upgradeHref={upgradeHref}>
+            <s-button
+              type="button"
+              variant="danger"
+              icon="delete"
+              className="disc-delete-icon"
+              tone="critical"
+              disabled={!canDelete}
+              onClick={canDelete ? onDelete : undefined}
+            />
+          </PlanGatedDeleteTooltip>
         </div>
       </td>
     </tr>
@@ -15132,6 +15262,8 @@ export default function DiscountsIndex() {
   } = useLoaderData() ?? {};
   const { onboarding } = useOutletContext() || {};
   const isPremium = Boolean(billingPlan?.isPremium);
+  const canDeleteRecords = isPremium;
+  const billingUpgradeHref = useBillingUpgradeHref();
   const maxTierDiscounts = billingPlan?.limits?.maxDiscounts ?? null;
   const tierDiscountLimitMessage =
     maxTierDiscounts != null ? freePlanDiscountLimitMessage(maxTierDiscounts) : "";
@@ -15238,6 +15370,7 @@ export default function DiscountsIndex() {
   const [noticeTitle, setNoticeTitle] = useState("");
   const [noticeMessage, setNoticeMessage] = useState("");
   const [showScheduleConfirmModal, setShowScheduleConfirmModal] = useState(false);
+  const [suppressStorefrontActiveName, setSuppressStorefrontActiveName] = useState("");
   const [tier1Icon, setTier1Icon] = useState(tierWidgetSettings?.tier1Icon || "%");
   const [tier2Icon, setTier2Icon] = useState(tierWidgetSettings?.tier2Icon || "🚚");
   const [subtotalLabel, setSubtotalLabel] = useState(
@@ -15257,12 +15390,6 @@ export default function DiscountsIndex() {
   );
   const [widgetUseCustomColors, setWidgetUseCustomColors] = useState(
     Boolean(tierWidgetSettings?.widgetUseCustomColors),
-  );
-  const [tier1LabelText, setTier1LabelText] = useState(
-    tierWidgetSettings?.tier1LabelText || "Discount",
-  );
-  const [tier2LabelText, setTier2LabelText] = useState(
-    tierWidgetSettings?.tier2LabelText || "Free shipping",
   );
   const [minAmountPrefixText, setMinAmountPrefixText] = useState(
     tierWidgetSettings?.minAmountPrefixText || "Min.",
@@ -15303,6 +15430,7 @@ export default function DiscountsIndex() {
     Boolean(parsedDynamicConfig.showTier2Subheading ?? true),
   );
   const [showHint, setShowHint] = useState(Boolean(parsedDynamicConfig.showHint ?? true));
+  const [widgetSettingsTab, setWidgetSettingsTab] = useState("progress");
   const [barFillColor, setBarFillColor] = useState(parsedDynamicConfig.barFillColor || "#166534");
   const [barTrackColor, setBarTrackColor] = useState(parsedDynamicConfig.barTrackColor || "#cbd5e1");
   const [iconBackgroundColor, setIconBackgroundColor] = useState(
@@ -15368,6 +15496,40 @@ export default function DiscountsIndex() {
     }));
   }, []);
 
+  const resetBadgeBackgroundDefaults = useCallback(() => {
+    const def = defaultBarStyle();
+    setProgressBarDesign((prev) => ({
+      ...prev,
+      barStyle: {
+        ...prev.barStyle,
+        tier1: {
+          before: {
+            ...prev.barStyle.tier1.before,
+            badgeBackgroundColor: def.tier1.before.badgeBackgroundColor,
+            iconColor: def.tier1.before.iconColor,
+          },
+          after: {
+            ...prev.barStyle.tier1.after,
+            badgeBackgroundColor: def.tier1.after.badgeBackgroundColor,
+            iconColor: def.tier1.after.iconColor,
+          },
+        },
+        tier2: {
+          before: {
+            ...prev.barStyle.tier2.before,
+            badgeBackgroundColor: def.tier2.before.badgeBackgroundColor,
+            iconColor: def.tier2.before.iconColor,
+          },
+          after: {
+            ...prev.barStyle.tier2.after,
+            badgeBackgroundColor: def.tier2.after.badgeBackgroundColor,
+            iconColor: def.tier2.after.iconColor,
+          },
+        },
+      },
+    }));
+  }, []);
+
   const progressBarDesignJsonSubmit = useMemo(
     () => JSON.stringify(sanitizeProgressBarDesignForDb(progressBarDesign)),
     [progressBarDesign],
@@ -15394,9 +15556,10 @@ export default function DiscountsIndex() {
   }, [groupedTierDiscounts]);
   const hasCreatedDiscount = groupedTierDiscounts.length > 0;
   const openDeleteDiscountModal = useCallback((discountName) => {
+    if (!canDeleteRecords) return;
     setPendingDeleteDiscountName(String(discountName || "").trim());
     setShowDeleteDiscountModal(true);
-  }, []);
+  }, [canDeleteRecords]);
   const closeDeleteDiscountModal = useCallback(() => {
     setShowDeleteDiscountModal(false);
     setPendingDeleteDiscountName("");
@@ -15488,21 +15651,17 @@ export default function DiscountsIndex() {
   );
   const primaryActiveDiscount = activeDiscountGroups[0] || null;
   const hasMultipleActiveDiscounts = activeDiscountGroups.length > 1;
-  const enabledTierRules = useMemo(
-    () => selectedDiscountTierRules.filter((tier) => tier.active && tier.status !== "EXPIRED"),
-    [selectedDiscountTierRules],
-  );
   const usedTierRewardTypes = useMemo(() => {
     const used = new Set();
-    for (const tier of enabledTierRules) {
+    for (const tier of selectedDiscountTierRules) {
       if (tierEditId && tier.id === tierEditId) continue;
       used.add(String(tier.rewardType || "").toUpperCase());
     }
     return used;
-  }, [enabledTierRules, tierEditId]);
+  }, [selectedDiscountTierRules, tierEditId]);
   const availableTierRewardTypes = useMemo(
-    () => TIER_DISCOUNT_TYPES.filter((opt) => !usedTierRewardTypes.has(opt.value) || opt.value === tierRewardType),
-    [tierRewardType, usedTierRewardTypes],
+    () => TIER_DISCOUNT_TYPES.filter((opt) => !usedTierRewardTypes.has(opt.value)),
+    [usedTierRewardTypes],
   );
   const hasAnyAvailableTierType = availableTierRewardTypes.length > 0;
   const maxTierLimitReached =
@@ -15522,6 +15681,21 @@ export default function DiscountsIndex() {
     setTierName(""); setTierMinSubtotal(""); setTierRewardType("FREE_SHIPPING");
     setTierDiscountPercent(""); setTierMessage(""); setShowTierDiscountModal(true);
   }, [tierDiscountLimitReached]);
+
+  const submitDiscountActiveToggle = useCallback(
+    (discountName, nextActive) => {
+      const name = String(discountName || "").trim();
+      if (!name) return;
+      if (nextActive) setSuppressStorefrontActiveName(name);
+      else setSuppressStorefrontActiveName((prev) => (prev === name ? "" : prev));
+      const fd = new FormData();
+      fd.set("intent", "discount-toggle-active");
+      fd.set("discountName", name);
+      if (nextActive) fd.set("discountActive", "on");
+      submit(fd, { method: "post" });
+    },
+    [submit],
+  );
 
   useEffect(() => {
     const sp = new URLSearchParams(location.search);
@@ -15567,6 +15741,7 @@ export default function DiscountsIndex() {
   }, [groupedTierDiscounts, overviewQuery, overviewSort]);
   const overviewTotalItems = processedOverviewDiscounts.length;
   const overviewPageSizeSafe = Math.max(1, Math.floor(Number(overviewPageSize)) || 5);
+  const overviewPaginationNeeded = overviewTotalItems > overviewPageSizeSafe;
   const overviewTotalPages =
     overviewTotalItems === 0 ? 1 : Math.ceil(overviewTotalItems / overviewPageSizeSafe);
   const overviewCurrentPage = Math.min(Math.max(1, overviewPage), overviewTotalPages);
@@ -15660,8 +15835,6 @@ export default function DiscountsIndex() {
     setWidgetTextColor(tierWidgetSettings?.widgetTextColor || "#111827");
     setWidgetBorderColor(tierWidgetSettings?.widgetBorderColor || "#000000");
     setWidgetUseCustomColors(Boolean(tierWidgetSettings?.widgetUseCustomColors));
-    setTier1LabelText(tierWidgetSettings?.tier1LabelText || "Discount");
-    setTier2LabelText(tierWidgetSettings?.tier2LabelText || "Free shipping");
     setMinAmountPrefixText(tierWidgetSettings?.minAmountPrefixText || "Min.");
     setShowTierIcons(Boolean(tierWidgetSettings?.showTierIcons ?? true));
     setShowTierLabels(Boolean(tierWidgetSettings?.showTierLabels ?? true));
@@ -15703,8 +15876,6 @@ export default function DiscountsIndex() {
     tierWidgetSettings?.widgetTextColor,
     tierWidgetSettings?.widgetBorderColor,
     tierWidgetSettings?.widgetUseCustomColors,
-    tierWidgetSettings?.tier1LabelText,
-    tierWidgetSettings?.tier2LabelText,
     tierWidgetSettings?.minAmountPrefixText,
     tierWidgetSettings?.showTierIcons,
     tierWidgetSettings?.showTierLabels,
@@ -15771,8 +15942,6 @@ export default function DiscountsIndex() {
       setWidgetTextColor(tierWidgetSettings?.widgetTextColor || "#111827");
       setWidgetBorderColor(tierWidgetSettings?.widgetBorderColor || "#000000");
       setWidgetUseCustomColors(Boolean(tierWidgetSettings?.widgetUseCustomColors));
-      setTier1LabelText(tierWidgetSettings?.tier1LabelText || "Discount");
-      setTier2LabelText(tierWidgetSettings?.tier2LabelText || "Free shipping");
       setMinAmountPrefixText(tierWidgetSettings?.minAmountPrefixText || "Min.");
       setShowTierIcons(Boolean(tierWidgetSettings?.showTierIcons ?? true));
       setShowTierLabels(Boolean(tierWidgetSettings?.showTierLabels ?? true));
@@ -15813,8 +15982,6 @@ export default function DiscountsIndex() {
     tierWidgetSettings?.widgetTextColor,
     tierWidgetSettings?.widgetBorderColor,
     tierWidgetSettings?.widgetUseCustomColors,
-    tierWidgetSettings?.tier1LabelText,
-    tierWidgetSettings?.tier2LabelText,
     tierWidgetSettings?.minAmountPrefixText,
     tierWidgetSettings?.showTierIcons,
     tierWidgetSettings?.showTierLabels,
@@ -15909,8 +16076,29 @@ export default function DiscountsIndex() {
     const conflictMessage = actionData?.errors?.discountScheduleConflict;
     if (!conflictMessage) return;
     setShowScheduleConfirmModal(false);
+    setDiscountEditActive(false);
+    if (!persistedScheduleLocked) {
+      setDiscountEditStartAt("");
+      setDiscountEditEndAt("");
+    }
     setNoticeTitle("Schedule conflict");
     setNoticeMessage(String(conflictMessage));
+    setShowNoticeModal(true);
+  }, [actionData, persistedScheduleLocked, showTierDiscountModal]);
+
+  useEffect(() => {
+    if (!actionData?.ok || actionData.tierIntent !== "discount-toggle-active") return;
+    setSuppressStorefrontActiveName("");
+  }, [actionData]);
+
+  useEffect(() => {
+    if (!actionData || actionData.ok) return;
+    const toggleError =
+      actionData?.errors?.discountActive || actionData?.errors?.discountName;
+    if (!toggleError) return;
+    if (showTierDiscountModal) setDiscountEditActive(false);
+    setNoticeTitle("Could not update discount");
+    setNoticeMessage(String(toggleError));
     setShowNoticeModal(true);
   }, [actionData, showTierDiscountModal]);
 
@@ -15990,12 +16178,23 @@ export default function DiscountsIndex() {
     submitDiscountSetup("done");
   }, [submitDiscountSetup]);
 
+  const widgetPreviewTiers = useMemo(
+    () => resolveEligibleActiveTiers(tierRules, tierDiscounts),
+    [tierRules, tierDiscounts],
+  );
+  const dynamicTierLabels = useMemo(
+    () => resolveTierCaptionLabels(widgetPreviewTiers),
+    [widgetPreviewTiers],
+  );
+  const widgetPreviewMins = useMemo(
+    () => resolveWidgetPreviewMins(widgetPreviewTiers),
+    [widgetPreviewTiers],
+  );
+
   const livePreviewSubtotal = Number(previewCartTotal || 0);
-  const liveTier1Min = Math.max(0, Number(tier1MinSubtotal || 0));
-  const liveTier2Min = Math.max(liveTier1Min, Number(tier2MinSubtotal || 0));
-  const liveTier1Reached = livePreviewSubtotal >= liveTier1Min && liveTier1Min > 0;
-  const liveTier2Reached = livePreviewSubtotal >= liveTier2Min && liveTier2Min > 0;
-  const liveProgress = liveTier2Reached ? 100 : liveTier1Reached ? 50 : 0;
+  const liveTier1Min = widgetPreviewMins.liveTier1Min;
+  const liveTier2Min = widgetPreviewMins.liveTier2Min;
+  const liveProgress = resolveLiveWidgetProgress(livePreviewSubtotal, liveTier1Min, liveTier2Min);
   const liveHintText =
     liveProgress === 0 ? sequentialHintZero : liveProgress === 50 ? sequentialHintMid : sequentialMsg2;
   const liveWidgetBg = widgetBackgroundColor || "#ffffff";
@@ -16106,6 +16305,28 @@ export default function DiscountsIndex() {
       background: #f1f8ff; color: #003f8c; border: 1px solid #b6d8ff; font-weight: 600;
     }
     .disc-overview-actions { display: flex; gap: 8px; }
+    .disc-overview-storefront-active { white-space: nowrap; }
+    .disc-storefront-toggle {
+      display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none;
+    }
+    .disc-storefront-toggle.is-disabled { opacity: 0.55; cursor: not-allowed; }
+    .disc-storefront-toggle input {
+      position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+      overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+    }
+    .disc-storefront-toggle-track {
+      position: relative; width: 40px; height: 22px; border-radius: 999px;
+      background: #d1d5db; transition: background 0.2s;
+    }
+    .disc-storefront-toggle.is-on .disc-storefront-toggle-track { background: #007b60; }
+    .disc-storefront-toggle-thumb {
+      position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%;
+      background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,0.2); transition: transform 0.2s;
+    }
+    .disc-storefront-toggle.is-on .disc-storefront-toggle-thumb { transform: translateX(18px); }
+    .disc-storefront-toggle-text {
+      font-size: 12px; font-weight: 600; color: #374151; min-width: 22px;
+    }
     .disc-configure-btn, .disc-delete-btn { padding: 5px 12px; font-size: 12px; }
     .disc-delete-icon { color: #dc2626; }
     .disc-btn {
@@ -16131,9 +16352,20 @@ export default function DiscountsIndex() {
   transform: none;
 }
     .disc-btn-secondary { background: #fff; color: #374151; border: 1px solid #d1d5db; }
-    .disc-btn-secondary:hover { background: #f9fafb; border-color: #9ca3af; }
+    .disc-btn-secondary:hover:not(:disabled) { background: #f9fafb; border-color: #9ca3af; }
+    .disc-btn-secondary:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
     .disc-btn-tertiary { background: transparent; color: #374151; border: 1px solid #e5e7eb; }
-    .disc-btn-tertiary:hover { background: #f9fafb; }
+    .disc-btn-tertiary:hover:not(:disabled) { background: #f9fafb; }
+    .disc-btn-tertiary:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+    .disc-btn:disabled {
+      cursor: not-allowed;
+    }
     .disc-btn-danger { background: #fff; color: #dc2626; border: 1px solid #fca5a5; }
     .disc-btn-danger:hover { background: #fee2e2; border-color: #ef4444; }
     .disc-btn-back { background: transparent; color: #6b7280; border: none; padding: 6px 0; font-size: 13px; }
@@ -16370,20 +16602,23 @@ export default function DiscountsIndex() {
     .disc-live-front-canvas {
       position: relative;
       min-height: 72px;
+      overflow: visible;
     }
-    .disc-live-tier-captions {
+    .disc-live-progress-rail {
+      width: 100%;
+    }
+    .disc-live-tier-captions-rail {
+      position: relative;
+    }
+    .disc-live-tier-cap {
       display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      gap: 12px;
-      margin-top: 10px;
-      padding: 0 2px;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      max-width: none;
+      font-size: 11px;
+      line-height: 1.35;
     }
-    .disc-live-tier-cap { min-width: 0; max-width: 46%; font-size: 11px; line-height: 1.35; }
-    .disc-live-tier-cap-left { text-align: left; }
-    .disc-live-tier-cap-right { text-align: right; }
-    .disc-live-tier-cap-title { font-weight: 700; font-size: 12px; margin-bottom: 2px; }
-    .disc-live-tier-cap-min { font-weight: 500; color: #6b7280; }
     .disc-live-overlay-chip {
       position: absolute;
       z-index: 5;
@@ -16980,6 +17215,63 @@ export default function DiscountsIndex() {
       padding: 0;
       overflow: hidden;
     }
+    .disc-widget-settings-panel {
+      background: white;
+      border: 1px solid var(--p-color-border, #e3e3e3);
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 1px 0 rgba(0, 0, 0, 0.05);
+    }
+    .disc-widget-settings-tabs {
+      display: flex;
+      border-bottom: 1px solid var(--p-color-border, #e3e3e3);
+      background: var(--p-color-bg-surface-secondary, #f7f7f7);
+      overflow-x: auto;
+    }
+    .disc-widget-settings-tab {
+      flex: 1 1 0;
+      min-width: 0;
+      border: none;
+      border-bottom: 2px solid transparent;
+      padding: 12px 10px;
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 1.35;
+      color: var(--p-color-text-secondary, #616161);
+      cursor: pointer;
+      background: transparent;
+      text-align: center;
+      transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+    }
+    .disc-widget-settings-tab:hover {
+      color: var(--p-color-text, #303030);
+      background: rgba(255, 255, 255, 0.6);
+    }
+    .disc-widget-settings-tab--active {
+      color: #005bd3;
+      background: #fff;
+      border-bottom-color: #005bd3;
+    }
+    .disc-widget-settings-tab-body {
+      padding: 0;
+      max-height: min(72vh, 720px);
+      overflow-y: auto;
+    }
+    .disc-widget-settings-tab-panel {
+      display: none;
+      padding: 0;
+    }
+    .disc-widget-settings-tab-panel--active {
+      display: block;
+    }
+    .disc-widget-settings-tab-panel .disc-advanced-group {
+      border: none;
+      border-radius: 0;
+      box-shadow: none;
+    }
+    .disc-bar-style-editor-head--compact {
+      justify-content: flex-end;
+    }
     .disc-advanced-group-head {
       display: flex;
       flex-direction: column;
@@ -17555,6 +17847,8 @@ export default function DiscountsIndex() {
                           key={tier.id}
                           tier={tier}
                           position={idx + 1}
+                          canDelete={canDeleteRecords}
+                          upgradeHref={billingUpgradeHref}
                           onEdit={() => {
                             setTierEditId(tier.id);
                             setTierName(tier.name || "");
@@ -17919,6 +18213,7 @@ export default function DiscountsIndex() {
                 <thead>
                   <tr>
                     <th>Discount</th>
+                    <th>Active</th>
                     <th>Status</th>
                     <th>Active tiers</th>
                     {/* <th>Scheduled</th>
@@ -17931,7 +18226,7 @@ export default function DiscountsIndex() {
                 <tbody>
                   {paginatedOverviewDiscounts.length === 0 ? (
                     <tr>
-                      <td colSpan={6} style={{ padding: "18px 16px", textAlign: "center", color: "#6b7280" }}>
+                      <td colSpan={7} style={{ padding: "18px 16px", textAlign: "center", color: "#6b7280" }}>
                         No discounts match your search.
                       </td>
                     </tr>
@@ -17940,6 +18235,11 @@ export default function DiscountsIndex() {
                       key={group.discountName}
                       group={group}
                       totalDiscountUsageCount={totalDiscountUsageCount}
+                      canDelete={canDeleteRecords}
+                      upgradeHref={billingUpgradeHref}
+                      suppressStorefrontActive={
+                        suppressStorefrontActiveName === group.discountName
+                      }
                       onConfigure={() => {
                         setDiscountEditName(group.discountName);
                         setDiscountEditOriginalName(group.discountName);
@@ -17951,6 +18251,9 @@ export default function DiscountsIndex() {
                       }}
                       onDelete={() => {
                         openDeleteDiscountModal(group.discountName);
+                      }}
+                      onToggleActive={(nextActive) => {
+                        submitDiscountActiveToggle(group.discountName, nextActive);
                       }}
                     />
                   ))}
@@ -17968,7 +18271,7 @@ export default function DiscountsIndex() {
                   className="disc-btn disc-btn-tertiary"
                   style={{ padding: "5px 10px", fontSize: 12 }}
                   onClick={() => setOverviewPage((p) => Math.max(1, p - 1))}
-                  disabled={overviewTotalItems === 0 || overviewCurrentPage <= 1}
+                  disabled={!overviewPaginationNeeded || overviewCurrentPage <= 1}
                 >
                   Previous
                 </button>
@@ -17980,9 +18283,7 @@ export default function DiscountsIndex() {
                   className="disc-btn disc-btn-tertiary"
                   style={{ padding: "5px 10px", fontSize: 12 }}
                   onClick={() => setOverviewPage((p) => Math.min(overviewTotalPages, p + 1))}
-                  disabled={
-                    overviewTotalItems === 0 || overviewCurrentPage >= overviewTotalPages
-                  }
+                  disabled={!overviewPaginationNeeded || overviewCurrentPage >= overviewTotalPages}
                 >
                   Next
                 </button>
@@ -18019,27 +18320,29 @@ export default function DiscountsIndex() {
       )}
 
       {!isPremium ? (
-        <s-section heading="Basic widget customization">
+        <s-section heading="Widget customization">
           <div className="disc-advanced-card">
             <div className="disc-advanced-body disc-basic-widget-body">
               <div className="disc-advanced-settings-intro" style={{ marginBottom: 20 }}>
-                <p className="disc-advanced-settings-intro-title">Customize your tier widget</p>
+                <p className="disc-advanced-settings-intro-title">Customize badges</p>
                 <p className="disc-advanced-settings-intro-text">
-                  On the Free plan you can set Tier 1 and Tier 2 label text. Changes preview live -
-                  save when you are ready to publish to your storefront.
+                  Tier names come from your active discount tiers. On the Free plan you can set tier
+                  icons, badge backgrounds, and icon colors — save to publish to your storefront.
+                  {widgetPreviewTiers.length === 0
+                    ? " Create and activate a discount with tiers to preview them here."
+                    : ""}
                 </p>
               </div>
               <div className="disc-advanced-layout">
                 <div className="disc-advanced-settings-wrap">
                   <Form method="post" className="disc-advanced-form">
                     <input type="hidden" name="intent" value="tier-widget-settings-save" />
+                    <input type="hidden" name="progressBarDesignJson" value={progressBarDesignJsonSubmit} />
                     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
                       <div className="disc-save-bar">
                         <div className="disc-save-bar-meta">
-                          <span className="disc-save-bar-label">Basic widget settings</span>
-                          <span className="disc-save-bar-hint">
-                            Save to apply tier labels on your storefront
-                          </span>
+                          <span className="disc-save-bar-label">Widget settings</span>
+                          <span className="disc-save-bar-hint">Save to apply icons and badge styling on your storefront</span>
                         </div>
                         <button type="submit" className="disc-btn disc-btn-primary">
                           Save settings
@@ -18047,33 +18350,44 @@ export default function DiscountsIndex() {
                       </div>
                       <div className="disc-advanced-group">
                         <div className="disc-advanced-group-head">
-                          <div className="disc-advanced-group-title">Tier labels</div>
+                          <div className="disc-advanced-group-title">Tier icons</div>
                           <div className="disc-advanced-group-help">
-                            Text shown under each tier on the progress widget
+                            Emoji or short text shown inside each tier badge
                           </div>
                         </div>
                         <div className="disc-grid-2">
                           <div className="disc-field">
-                            <label>Tier 1 label</label>
+                            <label>{dynamicTierLabels.tier1LabelText || "Tier 1"} icon</label>
                             <s-text-field
-                              name="tier1LabelText"
-                              value={tier1LabelText}
-                              onChange={(e) => setTier1LabelText(readInputText(e, tier1LabelText))}
-                              error={actionData?.errors?.tier1LabelText}
+                              name="tier1Icon"
+                              value={tier1Icon}
+                              onChange={(e) => setTier1Icon(readInputText(e, tier1Icon))}
+                              error={actionData?.errors?.tier1Icon}
                               autocomplete="off"
                             />
                           </div>
                           <div className="disc-field">
-                            <label>Tier 2 label</label>
+                            <label>{dynamicTierLabels.tier2LabelText || "Tier 2"} icon</label>
                             <s-text-field
-                              name="tier2LabelText"
-                              value={tier2LabelText}
-                              onChange={(e) => setTier2LabelText(readInputText(e, tier2LabelText))}
-                              error={actionData?.errors?.tier2LabelText}
+                              name="tier2Icon"
+                              value={tier2Icon}
+                              onChange={(e) => setTier2Icon(readInputText(e, tier2Icon))}
+                              error={actionData?.errors?.tier2Icon}
                               autocomplete="off"
                             />
                           </div>
                         </div>
+                      </div>
+                      <div className="disc-advanced-group disc-advanced-group--style-editor">
+                        <ProgressBarStyleEditor
+                          mode="badgeOnly"
+                          barStyle={progressBarDesign.barStyle}
+                          onPatchRoot={patchBarStyleRoot}
+                          onPatchPhase={patchBarStylePhase}
+                          onResetDefaults={resetBadgeBackgroundDefaults}
+                          tier1Name={dynamicTierLabels.tier1LabelText || "Tier 1"}
+                          tier2Name={dynamicTierLabels.tier2LabelText || "Tier 2"}
+                        />
                       </div>
                     </div>
                   </Form>
@@ -18084,7 +18398,7 @@ export default function DiscountsIndex() {
                       <div className="disc-advanced-preview-head-text">
                         <span className="disc-advanced-preview-title">Live preview</span>
                         <p className="disc-advanced-preview-help">
-                          Updates as you edit tier labels
+                          Updates as you edit icons and badge styling
                         </p>
                       </div>
                     </div>
@@ -18101,16 +18415,14 @@ export default function DiscountsIndex() {
                       sequentialMsg2={sequentialMsg2}
                       barFillColor={barFillColor}
                       barTrackColor={barTrackColor}
-                      iconBackgroundColor={iconBackgroundColor}
-                      iconTextColor={iconTextColor}
                       showTierIcons={showTierIcons}
                       tier1Icon={tier1Icon}
                       tier2Icon={tier2Icon}
                       showTierLabels={showTierLabels}
                       showTier1Heading={showTier1Heading}
                       showTier2Heading={showTier2Heading}
-                      tier1LabelText={tier1LabelText}
-                      tier2LabelText={tier2LabelText}
+                      tier1LabelText={dynamicTierLabels.tier1LabelText}
+                      tier2LabelText={dynamicTierLabels.tier2LabelText}
                       tierHeadingColor={tierHeadingColor}
                       showTierMinimums={showTierMinimums}
                       minAmountPrefixText={minAmountPrefixText}
@@ -18151,8 +18463,8 @@ export default function DiscountsIndex() {
                 <div className="disc-basic-upgrade-content">
                   <p className="disc-basic-upgrade-title">Advanced widget settings (Premium)</p>
                   <p className="disc-basic-upgrade-text">
-                    Widget colors, messages, icons, progress bar styling, visibility controls, and
-                    interactive preview editing unlock with Premium.
+                    Messages, bar styling, visibility controls, and full progress bar
+                    customization unlock with Premium.
                   </p>
                 </div>
                 <div className="disc-basic-upgrade-actions">
@@ -18196,17 +18508,46 @@ export default function DiscountsIndex() {
                           Save settings
                         </button>
                       </div>
-                      <div className="disc-advanced-group disc-advanced-group--style-editor">
-                        <ProgressBarStyleEditor
-                          barStyle={progressBarDesign.barStyle}
-                          onPatchRoot={patchBarStyleRoot}
-                          onPatchPhase={patchBarStylePhase}
-                          onResetDefaults={resetBarStyleDefaults}
-                        />
-                      </div>
+                      <div className="disc-widget-settings-panel">
+                        <div className="disc-widget-settings-tabs" role="tablist" aria-label="Widget customization">
+                          {WIDGET_SETTINGS_TABS.map((tab) => (
+                            <button
+                              key={tab.id}
+                              type="button"
+                              role="tab"
+                              aria-selected={widgetSettingsTab === tab.id}
+                              className={`disc-widget-settings-tab${widgetSettingsTab === tab.id ? " disc-widget-settings-tab--active" : ""}`}
+                              onClick={() => setWidgetSettingsTab(tab.id)}
+                            >
+                              {tab.label}
+                            </button>
+                          ))}
+                        </div>
+                        <div className="disc-widget-settings-tab-body">
+                          <div
+                            className={`disc-widget-settings-tab-panel${widgetSettingsTab === "progress" ? " disc-widget-settings-tab-panel--active" : ""}`}
+                            role="tabpanel"
+                            hidden={widgetSettingsTab !== "progress"}
+                          >
+                            <div className="disc-advanced-group disc-advanced-group--style-editor">
+                              <ProgressBarStyleEditor
+                                barStyle={progressBarDesign.barStyle}
+                                onPatchRoot={patchBarStyleRoot}
+                                onPatchPhase={patchBarStylePhase}
+                                onResetDefaults={resetBarStyleDefaults}
+                                tier1Name={dynamicTierLabels.tier1LabelText || "Tier 1"}
+                                tier2Name={dynamicTierLabels.tier2LabelText || "Tier 2"}
+                                showTitle={false}
+                              />
+                            </div>
+                          </div>
+                          <div
+                            className={`disc-widget-settings-tab-panel${widgetSettingsTab === "messages" ? " disc-widget-settings-tab-panel--active" : ""}`}
+                            role="tabpanel"
+                            hidden={widgetSettingsTab !== "messages"}
+                          >
                       <div className="disc-advanced-group">
                         <div className="disc-advanced-group-head">
-                          <div className="disc-advanced-group-title">Messages and Labels</div>
                           <div className="disc-advanced-group-help">
                             Customer-facing copy, typography, and text colors
                           </div>
@@ -18381,28 +18722,9 @@ export default function DiscountsIndex() {
                             />
                           </div>
                         </div>
-                        <div className="disc-grid-2">
-                          <div className="disc-field">
-                            <label>Tier 1 label text</label>
-                            <s-text-field
-                              name="tier1LabelText"
-                              value={tier1LabelText}
-                              onChange={(e) => setTier1LabelText(readInputText(e, tier1LabelText))}
-                              error={actionData?.errors?.tier1LabelText}
-                              autocomplete="off"
-                            />
-                          </div>
-                          <div className="disc-field">
-                            <label>Tier 2 label text</label>
-                            <s-text-field
-                              name="tier2LabelText"
-                              value={tier2LabelText}
-                              onChange={(e) => setTier2LabelText(readInputText(e, tier2LabelText))}
-                              error={actionData?.errors?.tier2LabelText}
-                              autocomplete="off"
-                            />
-                          </div>
-                        </div>
+                        <p className="disc-advanced-group-help" style={{ marginTop: 8 }}>
+                          Tier names under each badge are taken from your active discount tier configuration.
+                        </p>
                         <div className="disc-grid-2">
                           <div className="disc-field">
                             <label>Minimum amount prefix text</label>
@@ -18437,9 +18759,14 @@ export default function DiscountsIndex() {
                           </div>
                         </div>
                       </div>
+                          </div>
+                          <div
+                            className={`disc-widget-settings-tab-panel${widgetSettingsTab === "visibility" ? " disc-widget-settings-tab-panel--active" : ""}`}
+                            role="tabpanel"
+                            hidden={widgetSettingsTab !== "visibility"}
+                          >
                       <div className="disc-advanced-group">
                         <div className="disc-advanced-group-head">
-                          <div className="disc-advanced-group-title">Visibility Controls</div>
                           <div className="disc-advanced-group-help">Toggle what customers see in the widget</div>
                         </div>
                         <div className="disc-advanced-check-grid">
@@ -18535,6 +18862,9 @@ export default function DiscountsIndex() {
                           </label>
                         </div>
                       </div>
+                          </div>
+                        </div>
+                      </div>
                       {/* Hidden fields to submit all color values */}
                       <input type="hidden" name="iconBackgroundColor" value={iconBackgroundColor} />
                       <input type="hidden" name="iconTextColor" value={iconTextColor} />
@@ -18577,16 +18907,14 @@ export default function DiscountsIndex() {
                       sequentialMsg2={sequentialMsg2}
                       barFillColor={barFillColor}
                       barTrackColor={barTrackColor}
-                      iconBackgroundColor={iconBackgroundColor}
-                      iconTextColor={iconTextColor}
                       showTierIcons={showTierIcons}
                       tier1Icon={tier1Icon}
                       tier2Icon={tier2Icon}
                       showTierLabels={showTierLabels}
                       showTier1Heading={showTier1Heading}
                       showTier2Heading={showTier2Heading}
-                      tier1LabelText={tier1LabelText}
-                      tier2LabelText={tier2LabelText}
+                      tier1LabelText={dynamicTierLabels.tier1LabelText}
+                      tier2LabelText={dynamicTierLabels.tier2LabelText}
                       tierHeadingColor={tierHeadingColor}
                       showTierMinimums={showTierMinimums}
                       minAmountPrefixText={minAmountPrefixText}
