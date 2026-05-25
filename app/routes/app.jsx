@@ -9,6 +9,28 @@ import { dismissPlanDowngradeNotice } from "../lib/plan-limit-enforcement.server
 import { PlanGatedDeleteNavBridge } from "../components/plan-gated-delete.jsx";
 import { PlanDowngradeNoticeModal } from "../components/plan-downgrade-notice.jsx";
 import { PlanLockedGlobalStyles } from "../components/plan-locked-visual.jsx";
+import { EmailIcon } from "@shopify/polaris-icons";
+
+const SUPPORT_EMAIL = "contact@geekwebsolution.com";
+const SUPPORT_BUTTON_STYLE = {
+  position: "fixed",
+  bottom: "24px",
+  right: "24px",
+  zIndex: 9999,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: "10px",
+  fontSize: "15px",
+  fontWeight: 600,
+  cursor: "pointer",
+  background: "rgb(0 123 96 / 10%)",
+  color: "rgb(0 123 96)",
+  borderRadius: "6px",
+  padding: "10px 14px",
+  transition: "all 0.3s ease",
+  border: "none",
+};
 
 /** Unified theme app embed (announcement + tier progress + popup). */
 const STOREFRONT_EMBED_HANDLE = "smart-cart-storefront-embed";
@@ -119,6 +141,20 @@ export default function App() {
       <s-link href={withShopifyParams("/app/billing")}>Pricing</s-link>
       </s-app-nav>
       <Outlet context={{ onboarding, billingPlan }} />
+      <button
+        type="button"
+        aria-label="Get Support"
+        onClick={() => {
+          window.open(
+            `mailto:${SUPPORT_EMAIL}?subject=Get Support`,
+            "_blank",
+          );
+        }}
+        style={SUPPORT_BUTTON_STYLE}
+      >
+        <EmailIcon width={20} height={20} aria-hidden style={{ fill: "rgb(0 123 96)" }} />
+        <span>Get Support</span>
+      </button>
     </AppProvider>
   );
 }
