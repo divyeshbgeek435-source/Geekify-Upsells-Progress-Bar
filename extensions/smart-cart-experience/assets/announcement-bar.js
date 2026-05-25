@@ -22,6 +22,31 @@
     return s.replace(/[\u200B-\u200D\uFEFF]/g, "").trim();
   }
 
+  function sectionIdsMatch(a, b) {
+    var x = String(a == null ? "" : a).trim();
+    var y = String(b == null ? "" : b).trim();
+    if (!x || !y) return false;
+    if (x.toLowerCase() === y.toLowerCase()) return true;
+    return false;
+  }
+
+  /** Display toggle must be on (active:true) and pinned Section ID must match the payload. */
+  function shouldRenderAnnouncement(data) {
+    if (!data || data.ok !== true || data.active !== true) return false;
+    if (!sectionId) return true;
+    var resolvedSectionId = String(data.sectionHtmlId || "").trim();
+    var rowId = String(data.id || "").trim();
+    return (
+      sectionIdsMatch(resolvedSectionId, sectionId) ||
+      sectionIdsMatch(rowId, sectionId)
+    );
+  }
+
+  function hideAnnouncement() {
+    removeExisting();
+    lastRenderVersion = "";
+  }
+
   var sectionId = normalizeThemeSectionId(script.dataset.sectionId);
   var apiUrl = (script.dataset.apiUrl || "").trim();
   var zIndex = parseInt(String(script.dataset.zIndex || "1000"), 10) || 1000;
@@ -676,16 +701,24 @@
 
   function refreshAnnouncement() {
     ensureHookHost();
-    if (!sectionId) {
-      removeExisting();
-      showInlineError("Set a Section ID in this block to render an announcement.");
-      return;
-    }
     fetchAnnouncementData()
       .then(function (wrapped) {
-        if (!wrapped || !wrapped.data) return;
+        if (!wrapped || !wrapped.data) {
+          hideAnnouncement();
+          return;
+        }
         var data = wrapped.data;
-        if (!data.ok) {
+        if (!shouldRenderAnnouncement(data)) {
+          hideAnnouncement();
+          var errCode = String(data.error || "");
+          if (
+            errCode === "no_active_header" ||
+            errCode === "header_inactive" ||
+            data.active === false ||
+            errCode === "not_found"
+          ) {
+            return;
+          }
           console.warn(
             "[SCE announcement bar]",
             data.error || "error",
@@ -694,27 +727,26 @@
             "Request URL:",
             candidateBases.join(", "),
           );
-          var errCode = String(data.error || "");
           var hint = String(data.hint || "").trim();
           var msg =
-            errCode === "missing_section_id"
-              ? "Set the Section ID in this block to match an announcement in the app."
-              : errCode === "missing_shop"
-                ? "Shop could not be determined from the app proxy request. Confirm App proxy settings."
-                : errCode === "app_proxy_auth_failed"
-                  ? hint ||
-                    "App proxy request was not verified. Open the storefront on your shop domain and confirm App proxy configuration."
+            errCode === "missing_shop"
+              ? "Shop could not be determined from the app proxy request. Confirm App proxy settings."
+              : errCode === "app_proxy_auth_failed"
+                ? hint ||
+                  "App proxy request was not verified. Open the storefront on your shop domain and confirm App proxy configuration."
                 : hint ||
-                  "Announcement not found. Copy the Section ID from Announcement Bars in the app and paste it here (must match that shop).";
+                  "Announcement not found. Turn Display on in the app, or paste the Section ID from Announcement bars.";
           showInlineError(msg);
           return;
         }
         var nextVersion = dataVersion(data);
         if (nextVersion && nextVersion === lastRenderVersion) return;
+        hideAnnouncement();
         renderFromData(data);
         lastRenderVersion = nextVersion;
       })
       .catch(function (err) {
+        hideAnnouncement();
         console.warn("[SCE announcement bar] Request failed", err && err.message ? err.message : err, candidateBases.join(", "));
         if (!lastRenderVersion) {
           showInlineError(

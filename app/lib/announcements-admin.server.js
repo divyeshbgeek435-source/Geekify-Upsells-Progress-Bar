@@ -14,14 +14,15 @@ import {
   resolveSectionId,
 } from "./additional-ui-config.js";
 import { buildAdditionalTemplate } from "./additional-ui-template.js";
+import { enforceSingleActiveAnnouncementBar } from "../utils/announcementBarActive.server.js";
 
-const ANNOUNCE_EMBED_HANDLE = "announcement-bar-embed";
+const ANNOUNCE_EMBED_HANDLE = "smart-cart-storefront-embed";
 const ANNOUNCE_BLOCK_HANDLE = "announcement-bar-block";
 
 export async function loadAnnouncementHeaderAdminContext(shop, editId) {
   const bars = await prisma.announcementHeader.findMany({
     where: { shop },
-    orderBy: { updatedAt: "desc" },
+    orderBy: { createdAt: "asc" },
   });
 
   const editingBar = editId ? bars.find((b) => b.id === editId) ?? null : null;
@@ -54,14 +55,16 @@ export async function loadAnnouncementBodyAdminBlocks(shop) {
   try {
     rows = await prisma.announcementBody.findMany({
       where: { shop },
-      orderBy: { updatedAt: "desc" },
+      orderBy: { createdAt: "asc" },
       select: {
         id: true,
         name: true,
         sectionId: true,
         bodyJson: true,
         templateJson: true,
+        createdAt: true,
         updatedAt: true,
+        active: true,
       },
     });
   } catch (error) {
@@ -69,8 +72,16 @@ export async function loadAnnouncementBodyAdminBlocks(shop) {
     if (!message.includes("Unknown field `templateJson`")) throw error;
     rows = await prisma.announcementBody.findMany({
       where: { shop },
-      orderBy: { updatedAt: "desc" },
-      select: { id: true, name: true, sectionId: true, bodyJson: true, updatedAt: true },
+      orderBy: { createdAt: "asc" },
+      select: {
+        id: true,
+        name: true,
+        sectionId: true,
+        bodyJson: true,
+        createdAt: true,
+        updatedAt: true,
+        active: true,
+      },
     });
   }
 
@@ -86,14 +97,93 @@ export async function loadAnnouncementBodyAdminBlocks(shop) {
           row.id,
         ),
       },
+      createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
       templateJson: row.templateJson ?? "{}",
+      active: Boolean(row.active),
     };
   });
 }
 
+async function setAnnouncementHeaderActive(shop, form) {
+  const id = String(form.get("id") || "").trim();
+  const wantActive = String(form.get("active") || "") === "1";
+  const confirmOverride = form.get("confirmOverride") === "true";
+
+  const row = await prisma.announcementHeader.findFirst({
+    where: { id, shop },
+    select: { id: true, name: true },
+  });
+  if (!row) return { ok: false, error: "Announcement bar not found." };
+
+  if (!wantActive) {
+    await prisma.announcementHeader.update({
+      where: { id: row.id },
+      data: { active: false },
+    });
+    return { ok: true, intent: "set_active", recordKind: "header", id: row.id, active: false };
+  }
+
+  const existingActive = await prisma.announcementHeader.findFirst({
+    where: { shop, active: true, NOT: { id: row.id } },
+    select: { id: true, name: true },
+  });
+
+  if (existingActive && !confirmOverride) {
+    return {
+      ok: false,
+      needsHeaderOverride: true,
+      existingActiveName: existingActive.name,
+      existingActiveId: existingActive.id,
+      pendingId: row.id,
+    };
+  }
+
+  await prisma.$transaction([
+    prisma.announcementHeader.updateMany({
+      where: { shop, NOT: { id: row.id } },
+      data: { active: false },
+    }),
+    prisma.announcementHeader.update({
+      where: { id: row.id },
+      data: { active: true },
+    }),
+  ]);
+  await enforceSingleActiveAnnouncementBar(shop, row.id);
+
+  return { ok: true, intent: "set_active", recordKind: "header", id: row.id, active: true };
+}
+
+async function setAnnouncementBodyActive(shop, form) {
+  const rowId = String(form.get("rowId") || "").trim();
+  const wantActive = String(form.get("active") || "") === "1";
+
+  const row = await prisma.announcementBody.findFirst({
+    where: { id: rowId, shop },
+    select: { id: true },
+  });
+  if (!row) return { ok: false, error: "Announcement section not found." };
+
+  await prisma.announcementBody.update({
+    where: { id: row.id },
+    data: { active: wantActive },
+  });
+
+  return {
+    ok: true,
+    intent: "set_active",
+    recordKind: "body",
+    rowId: row.id,
+    active: wantActive,
+  };
+}
+
 export async function handleAnnouncementHeaderAdminAction(shop, form) {
   const intent = String(form.get("intent") || "");
+
+  if (intent === "set_active") {
+    return setAnnouncementHeaderActive(shop, form);
+  }
 
   if (intent === "delete") {
     const id = String(form.get("id") || "");
@@ -166,6 +256,7 @@ export async function handleAnnouncementHeaderAdminAction(shop, form) {
           customHtml,
           customLiquid,
           customCss,
+          active: false,
         },
       });
     } catch (error) {
@@ -180,6 +271,7 @@ export async function handleAnnouncementHeaderAdminAction(shop, form) {
           customHtml,
           customLiquid,
           customCss,
+          active: false,
         },
       });
     }
@@ -219,7 +311,7 @@ export async function handleAnnouncementHeaderAdminAction(shop, form) {
     if (result.count === 0) {
       return { ok: false, error: "Bar not found." };
     }
-    return { ok: true };
+    return { ok: true, intent: "update" };
   }
 
   return { ok: false, error: "Unknown action." };
@@ -227,6 +319,10 @@ export async function handleAnnouncementHeaderAdminAction(shop, form) {
 
 export async function handleAnnouncementBodyAdminAction(shop, form) {
   const intent = String(form.get("intent") || "");
+
+  if (intent === "set_active") {
+    return setAnnouncementBodyActive(shop, form);
+  }
 
   if (intent === "delete") {
     const rowId = String(form.get("rowId") || "").trim();
@@ -379,6 +475,10 @@ function inferAnnouncementFormKind(form) {
   const explicit = String(form.get("recordKind") || "").trim().toLowerCase();
   if (explicit === "body" || explicit === "header") return explicit;
   const intent = String(form.get("intent") || "");
+  if (intent === "set_active") {
+    if (form.has("rowId") && String(form.get("rowId") || "").trim()) return "body";
+    return "header";
+  }
   if (intent === "delete" && form.has("rowId") && String(form.get("rowId") || "").trim()) {
     return "body";
   }

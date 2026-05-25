@@ -15,14 +15,14 @@
   data-sce-ab-hook="sce-ab-hook-{{ block.id }}"
   data-placement="sticky"
   data-section-id="{{ block.settings.section_id | escape }}"
-  data-api-url="{{ block.settings.api_url | default: '/apps/sce/announcement-bar' | escape }}"
-  data-z-index="{{ block.settings.z_index }}"
+  data-api-url="/apps/sce/announcement-bar"
+  data-z-index="1000"
   defer
 ></script>
 
 {% schema %}
 {
-  "name": "Announcement bar(Header)",
+  "name": "Announcement bar (Header)",
   "target": "section",
   "enabled_on": {
     "templates": ["*"],
@@ -31,13 +31,13 @@
   "settings": [
     {
       "type": "paragraph",
-      "content": "Add this block only in the theme’s Header or Footer section group (Shopify restricts it there). Paste the Section HTML ID from the app (Copy Section ID). Uses the shop’s app proxy at /apps/sce/announcement-bar (same origin as your storefront)."
+      "content": "Add this block inside the theme Header section (Theme → Header). Renders inline in the header area. For a sticky bar on every page, enable Geekify storefront under App embeds instead."
     },
     {
       "type": "text",
       "id": "section_id",
-      "label": "Section ID",
-      "info": "Must match Announcement bars in the app (case-insensitive). Examples: sce-ab-… or sce-announcement-…"
+      "label": "Section ID (optional)",
+      "info": "Leave blank for the active Header announcement from the app. Paste a Section ID to pin one bar (Display must be on in the app)."
     }
   ]
 }

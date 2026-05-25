@@ -1,29 +1,44 @@
+import { useState } from "react";
 import { Outlet, useLoaderData, useLocation, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { getShopifyAppClientId } from "../lib/shopify-config.server";
 import { authenticate } from "../shopify.server";
 import { loadShopBillingContext } from "../lib/app-billing.server.js";
+import { dismissPlanDowngradeNotice } from "../lib/plan-limit-enforcement.server.js";
+import { PlanGatedDeleteNavBridge } from "../components/plan-gated-delete.jsx";
+import { PlanDowngradeNoticeModal } from "../components/plan-downgrade-notice.jsx";
+import { PlanLockedGlobalStyles } from "../components/plan-locked-visual.jsx";
 
-const APP_EMBED_BLOCK_HANDLE = "free-shipping-progress-embed";
+/** Unified theme app embed (announcement + tier progress + popup). */
+const STOREFRONT_EMBED_HANDLE = "smart-cart-storefront-embed";
 const CART_PAGE_BLOCK_HANDLE = "free-shipping-progress-block";
 const ADDITIONAL_UI_BLOCK_HANDLE = "additional-ui-block";
-const POPUP_DESIGN_BLOCK_HANDLE = "popup-design-block";
-const POPUP_DESIGN_EMBED_HANDLE = "popup-design-embed";
+const ANNOUNCEMENT_BAR_BLOCK_HANDLE = "announcement-bar-block";
+
+export const action = async ({ request }) => {
+  const { session } = await authenticate.admin(request);
+  const form = await request.formData();
+  if (String(form.get("intent") || "") === "dismiss-plan-downgrade-notice") {
+    await dismissPlanDowngradeNotice(session.shop);
+    return { ok: true, intent: "dismiss-plan-downgrade-notice" };
+  }
+  return { ok: false, error: "Unknown action." };
+};
 
 export const loader = async ({ request }) => {
   const { session, billing } = await authenticate.admin(request);
-  const billingPlan = await loadShopBillingContext(billing);
   const shop = session.shop;
+  const billingPlan = await loadShopBillingContext(billing, shop);
   const storeHandle = shop.replace(/\.myshopify\.com$/i, "");
 
   const clientId = getShopifyAppClientId();
   const apiKeyForBridge =
     process.env.SHOPIFY_API_KEY?.trim() || clientId;
 
-  const appEmbedQuery = new URLSearchParams({
+  const storefrontEmbedQuery = new URLSearchParams({
     context: "apps",
-    activateAppId: `${clientId}/${APP_EMBED_BLOCK_HANDLE}`,
+    activateAppId: `${clientId}/${STOREFRONT_EMBED_HANDLE}`,
   });
   const cartBlockQuery = new URLSearchParams({
     template: "cart",
@@ -34,13 +49,10 @@ export const loader = async ({ request }) => {
     addAppBlockId: `${clientId}/${ADDITIONAL_UI_BLOCK_HANDLE}`,
     target: "newAppsSection",
   });
-  const popupDesignBlockQuery = new URLSearchParams({
-    addAppBlockId: `${clientId}/${POPUP_DESIGN_BLOCK_HANDLE}`,
-    target: "newAppsSection",
-  });
-  const popupDesignEmbedQuery = new URLSearchParams({
-    context: "apps",
-    activateAppId: `${clientId}/${POPUP_DESIGN_EMBED_HANDLE}`,
+  const announcementBarBlockHeaderQuery = new URLSearchParams({
+    template: "index",
+    addAppBlockId: `${clientId}/${ANNOUNCEMENT_BAR_BLOCK_HANDLE}`,
+    target: "sectionGroup:header",
   });
 
   const editorBase = `https://admin.shopify.com/store/${storeHandle}/themes/current/editor`;
@@ -49,21 +61,25 @@ export const loader = async ({ request }) => {
     shop,
     storeHandle,
     clientIdConfigured: Boolean(clientId),
-    appEmbedEditorUrl: `${editorBase}?${appEmbedQuery.toString()}`,
+    appEmbedEditorUrl: `${editorBase}?${storefrontEmbedQuery.toString()}`,
     cartBlockEditorUrl: `${editorBase}?${cartBlockQuery.toString()}`,
     additionalUiBlockEditorUrl: `${editorBase}?${additionalUiBlockQuery.toString()}`,
-    popupDesignBlockEditorUrl: `${editorBase}?${popupDesignBlockQuery.toString()}`,
-    popupDesignEmbedEditorUrl: `${editorBase}?${popupDesignEmbedQuery.toString()}`,
-    legacyAppEmbedUrl: `https://${shop}/admin/themes/current/editor?${appEmbedQuery.toString()}`,
+    popupDesignEmbedEditorUrl: `${editorBase}?${storefrontEmbedQuery.toString()}`,
+    announcementBarEmbedEditorUrl: `${editorBase}?${storefrontEmbedQuery.toString()}`,
+    announcementBarBlockHeaderUrl: `${editorBase}?${announcementBarBlockHeaderQuery.toString()}`,
+    legacyAppEmbedUrl: `https://${shop}/admin/themes/current/editor?${storefrontEmbedQuery.toString()}`,
     legacyCartBlockUrl: `https://${shop}/admin/themes/current/editor?${cartBlockQuery.toString()}`,
     legacyAdditionalUiBlockUrl: `https://${shop}/admin/themes/current/editor?${additionalUiBlockQuery.toString()}`,
-    legacyPopupDesignBlockUrl: `https://${shop}/admin/themes/current/editor?${popupDesignBlockQuery.toString()}`,
-    legacyPopupDesignEmbedUrl: `https://${shop}/admin/themes/current/editor?${popupDesignEmbedQuery.toString()}`,
-    appEmbedHandle: APP_EMBED_BLOCK_HANDLE,
+    legacyPopupDesignEmbedUrl: `https://${shop}/admin/themes/current/editor?${storefrontEmbedQuery.toString()}`,
+    legacyAnnouncementBarEmbedUrl: `https://${shop}/admin/themes/current/editor?${storefrontEmbedQuery.toString()}`,
+    legacyAnnouncementBarBlockHeaderUrl: `https://${shop}/admin/themes/current/editor?${announcementBarBlockHeaderQuery.toString()}`,
+    storefrontEmbedHandle: STOREFRONT_EMBED_HANDLE,
+    appEmbedHandle: STOREFRONT_EMBED_HANDLE,
     cartBlockHandle: CART_PAGE_BLOCK_HANDLE,
     additionalUiBlockHandle: ADDITIONAL_UI_BLOCK_HANDLE,
-    popupDesignBlockHandle: POPUP_DESIGN_BLOCK_HANDLE,
-    popupDesignEmbedHandle: POPUP_DESIGN_EMBED_HANDLE,
+    popupDesignEmbedHandle: STOREFRONT_EMBED_HANDLE,
+    announcementBarEmbedHandle: STOREFRONT_EMBED_HANDLE,
+    announcementBarBlockHandle: ANNOUNCEMENT_BAR_BLOCK_HANDLE,
   };
 
   return { apiKey: apiKeyForBridge, onboarding, billingPlan };
@@ -72,6 +88,9 @@ export const loader = async ({ request }) => {
 export default function App() {
   const { apiKey, onboarding, billingPlan } = useLoaderData();
   const location = useLocation();
+  const [downgradeNoticeDismissed, setDowngradeNoticeDismissed] = useState(false);
+  const showPlanDowngradeNotice =
+    Boolean(billingPlan?.showPlanDowngradeNotice) && !downgradeNoticeDismissed;
 
   const withShopifyParams = (path) => {
     const [pathname, existingQuery = ""] = path.split("?");
@@ -87,6 +106,12 @@ export default function App() {
 
   return (
     <AppProvider embedded apiKey={apiKey}>
+      <PlanLockedGlobalStyles />
+      <PlanGatedDeleteNavBridge />
+      <PlanDowngradeNoticeModal
+        open={showPlanDowngradeNotice}
+        onDismiss={() => setDowngradeNoticeDismissed(true)}
+      />
       <s-app-nav> 
       <s-link href={withShopifyParams("/app/discounts")}>Discounts</s-link>
       <s-link href={withShopifyParams("/app/popup-design")}>Popup</s-link> 

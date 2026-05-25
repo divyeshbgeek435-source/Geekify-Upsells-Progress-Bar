@@ -1,7 +1,10 @@
 import { APP_PLAN_ID } from "./app-plans.shared.js";
 
 export const FREE_PLAN_DELETE_BLOCKED_MESSAGE =
-  "You are currently on the Free Plan, so deletion is not allowed. You can use limited features only. To unlock this feature, please upgrade your plan.";
+  "Delete feature is not available in Free Plan. Upgrade to access it.";
+
+/** Hover tooltip copy for disabled delete (speech bubble). */
+export const FREE_PLAN_DELETE_TOOLTIP_MESSAGE = FREE_PLAN_DELETE_BLOCKED_MESSAGE;
 
 export const BILLING_PLANS_PATH = "/app/billing";
 

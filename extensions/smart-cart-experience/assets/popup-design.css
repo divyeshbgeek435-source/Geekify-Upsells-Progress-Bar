@@ -100,6 +100,13 @@
   min-height: 140px;
 }
 
+  .sce-popup-modal--layout-split-image-left,
+.sce-popup-modal--layout-split-image-right {
+  flex-direction: row;
+  min-height: 280px;
+  max-height: min(90vh, 560px);
+}
+
 .sce-popup-modal--layout-split-image-right {
   flex-direction: row-reverse;
 }
@@ -566,6 +573,7 @@
   }
 
   .sce-popup-modal,
+  .sce-popup-modal--layout-split-image-left,
   .sce-popup-modal--layout-split-image-right,
   .sce-popup-modal--layout-content-only,
   .sce-popup-modal--layout-stacked {

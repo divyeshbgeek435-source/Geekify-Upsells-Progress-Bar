@@ -9,6 +9,10 @@ import {
   FREE_PLAN_DELETE_BLOCKED_MESSAGE,
   canDeleteOnPlan,
 } from "./plan-delete-access.shared.js";
+import {
+  loadShopPlanSlots,
+  syncShopPlanState,
+} from "./plan-limit-enforcement.server.js";
 
 /** Use test charges on dev stores unless explicitly disabled. */
 export function billingUsesTestMode() {
@@ -31,27 +35,51 @@ export async function resolveShopAppPlan(billing) {
 
 /**
  * @param {import('@shopify/shopify-app-react-router/server').BillingContext} billing
+ * @param {string} [shop] When provided, enforces Free plan limits and tracks Premium → Free transitions.
  */
-export async function loadShopBillingContext(billing) {
+export async function loadShopBillingContext(billing, shop) {
   const isTest = billingUsesTestMode();
   const check = await billing.check({
     plans: [PREMIUM_PLAN_BILLING_KEY],
     isTest,
   });
   const planId = check.hasActivePayment ? APP_PLAN_ID.PREMIUM : APP_PLAN_ID.FREE;
-  const limits = getPlanLimits(planId);
+  let limits = getPlanLimits(planId);
+  let planSlots = null;
+  let showPlanDowngradeNotice = false;
   const activeSubscription = check.appSubscriptions?.[0] ?? null;
+
+  if (shop) {
+    const synced = await syncShopPlanState(shop, planId);
+    limits = synced.limits;
+    planSlots = synced.planSlots;
+    showPlanDowngradeNotice = synced.showPlanDowngradeNotice;
+  } else if (planId === APP_PLAN_ID.FREE) {
+    planSlots = {
+      editableDiscountNames: [],
+      editablePopupIds: [],
+      editableAnnouncementHeaderIds: [],
+      editableAnnouncementBodyIds: [],
+    };
+  }
 
   return {
     planId,
     planName: planDisplayName(planId),
     isPremium: planId === APP_PLAN_ID.PREMIUM,
     limits,
+    planSlots,
+    showPlanDowngradeNotice,
     isTest,
     hasActivePayment: check.hasActivePayment,
     appSubscriptions: check.appSubscriptions ?? [],
     activeSubscription,
   };
+}
+
+/** @deprecated Prefer planSlots from loadShopBillingContext */
+export async function loadShopPlanSlotsForBilling(shop, planId) {
+  return loadShopPlanSlots(shop, planId);
 }
 
 export async function countShopAnnouncementHeaders(shop) {

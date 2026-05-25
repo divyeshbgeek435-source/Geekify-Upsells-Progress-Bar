@@ -12768,6 +12768,15 @@ import {
   rejectIfDeleteNotAllowed,
   rejectIfDiscountLimitReached,
 } from "../lib/app-billing.server.js";
+import { rejectIfPlanItemLocked } from "../lib/plan-limit-enforcement.server.js";
+import {
+  isDiscountEditableOnPlan,
+  PLAN_LOCKED_ITEM_MESSAGE,
+} from "../lib/plan-limit-access.shared.js";
+import {
+  planLockedRowClassName,
+  PLAN_LOCKED_PANEL_CLASS,
+} from "../components/plan-locked-visual.jsx";
 import { PREMIUM_PLAN_PRICE_USD } from "../lib/app-plans.shared.js";
 import { saveFreePlanWidgetSettings } from "../lib/widget-plan-access.server.js";
 import prisma from "../db.server";
@@ -12785,7 +12794,7 @@ import {
 } from "../components/disc-advanced-live-widget.jsx";
 import { ProgressBarStyleEditor } from "../components/disc-progress-bar-style-editor.jsx";
 import {
-  PlanGatedDeleteTooltip,
+  PlanGatedDeleteButton,
   useBillingUpgradeHref,
 } from "../components/plan-gated-delete.jsx";
 import { defaultBarStyle } from "../lib/progress-bar-design.js";
@@ -13368,6 +13377,7 @@ function groupTiersByDiscount(tiers, discounts = []) {
   const map = new Map();
   for (const discount of discounts || []) {
     const name = String(discount.name || "Default Discount");
+    const createdAt = parseTierDate(discount.createdAt);
     map.set(name, {
       hasExplicitDiscount: true,
       discountName: name,
@@ -13375,6 +13385,7 @@ function groupTiersByDiscount(tiers, discounts = []) {
       discountScheduleStartAt: parseTierDate(discount.scheduleStartAt),
       discountScheduleEndAt: parseTierDate(discount.scheduleEndAt),
       discountStatus: resolveDiscountStatus(discount),
+      discountCreatedAt: createdAt ? createdAt.getTime() : 0,
       tiers: [],
     });
   }
@@ -13388,10 +13399,17 @@ function groupTiersByDiscount(tiers, discounts = []) {
         discountScheduleStartAt: null,
         discountScheduleEndAt: null,
         discountStatus: "INACTIVE",
+        discountCreatedAt: Number.POSITIVE_INFINITY,
         tiers: [],
       });
     }
-    map.get(key).tiers.push(tier);
+    const bucket = map.get(key);
+    bucket.tiers.push(tier);
+    const tierCreated = parseTierDate(tier.createdAt);
+    if (tierCreated) {
+      const ts = tierCreated.getTime();
+      bucket.discountCreatedAt = Math.min(bucket.discountCreatedAt ?? ts, ts);
+    }
   }
   return Array.from(map.values()).map((entry) => {
     const tierList = entry.tiers.map((tier) => ({
@@ -13433,6 +13451,10 @@ function groupTiersByDiscount(tiers, discounts = []) {
       discountActive: entry.discountActive,
       discountScheduleStartAt: derivedScheduleStartAt,
       discountScheduleEndAt: derivedScheduleEndAt,
+      discountCreatedAt:
+        Number.isFinite(entry.discountCreatedAt) && entry.discountCreatedAt !== Number.POSITIVE_INFINITY
+          ? entry.discountCreatedAt
+          : 0,
       tiers: tierList.sort((a, b) => a.minSubtotal - b.minSubtotal),
       activeCount,
       scheduledCount,
@@ -13441,7 +13463,7 @@ function groupTiersByDiscount(tiers, discounts = []) {
       startsAt,
       endsAt,
     };
-  });
+  }).sort((a, b) => (a.discountCreatedAt ?? 0) - (b.discountCreatedAt ?? 0));
 }
 
 function resolveApplicableTier(tiers, subtotal) {
@@ -13637,7 +13659,7 @@ async function syncAutoTierDiscount(admin, tiers) {
 
 export const loader = async ({ request }) => {
   const { admin, session, billing } = await authenticate.admin(request);
-  const billingPlan = await loadShopBillingContext(billing);
+  const billingPlan = await loadShopBillingContext(billing, session.shop);
   const url = new URL(request.url);
   const editId = url.searchParams.get("editId");
   const previewSubtotal = Number(url.searchParams.get("previewSubtotal") || 0);
@@ -13798,10 +13820,36 @@ export const loader = async ({ request }) => {
 
 export const action = async ({ request }) => {
   const { admin, session, billing } = await authenticate.admin(request);
-  const billingPlan = await loadShopBillingContext(billing);
+  const billingPlan = await loadShopBillingContext(billing, session.shop);
   const formData = await request.formData();
   const intent = String(formData.get("intent") || "");
   const id = String(formData.get("id") || "");
+  const planSlots = billingPlan.planSlots;
+  const planMutableIntents = new Set([
+    "discount-toggle-active",
+    "discount-upsert",
+    "tier-create",
+    "tier-update",
+  ]);
+  if (planMutableIntents.has(intent)) {
+    const names = [
+      formData.get("discountName"),
+      formData.get("originalDiscountName"),
+      formData.get("tierDiscountName"),
+    ]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean);
+    for (const name of names) {
+      const lockErr = rejectIfPlanItemLocked(billingPlan.planId, planSlots, {
+        discountName: name,
+      });
+      if (!lockErr) continue;
+      if (intent === "discount-toggle-active" && !formData.has("discountActive")) {
+        continue;
+      }
+      return lockErr;
+    }
+  }
   if (intent === "delete" || intent === "discount-delete" || intent === "tier-delete") {
     const deleteBlock = rejectIfDeleteNotAllowed(billingPlan.planId);
     if (deleteBlock) return deleteBlock;
@@ -13914,7 +13962,6 @@ export const action = async ({ request }) => {
         };
       }
     }
-    let persistedToTierDiscount = false;
     if (typeof prisma.tierDiscount?.upsert === "function") {
       try {
         await prisma.tierDiscount.upsert({
@@ -13928,20 +13975,17 @@ export const action = async ({ request }) => {
           },
           update: { active: discountActive },
         });
-        persistedToTierDiscount = true;
       } catch (error) {
         if (!isMissingTableError(error, "TierDiscount")) throw error;
       }
     }
-    if (!persistedToTierDiscount) {
-      try {
-        await prisma.thresholdTier.updateMany({
-          where: { shop: session.shop, discountName },
-          data: { active: discountActive },
-        });
-      } catch (error) {
-        if (!isUnknownPrismaArgument(error, "discountName")) throw error;
-      }
+    try {
+      await prisma.thresholdTier.updateMany({
+        where: { shop: session.shop, discountName },
+        data: { active: discountActive },
+      });
+    } catch (error) {
+      if (!isUnknownPrismaArgument(error, "discountName")) throw error;
     }
     const syncableTiers = await getSyncableTiers();
     const syncResult = await syncAutoTierDiscount(admin, syncableTiers);
@@ -15104,27 +15148,11 @@ function TierCard({ tier, position, onEdit, onDelete, canDelete, upgradeHref }) 
         >
           Edit
         </button>
-        <PlanGatedDeleteTooltip canDelete={canDelete} upgradeHref={upgradeHref}>
-          <button
-            type="button"
-            onClick={canDelete ? onDelete : undefined}
-            disabled={!canDelete}
-            style={{
-              padding: "5px 12px",
-              borderRadius: 6,
-              border: "1px solid #fca5a5",
-              background: "#fff",
-              color: "#dc2626",
-              fontSize: 12,
-              fontWeight: 500,
-              cursor: canDelete ? "pointer" : "not-allowed",
-              opacity: canDelete ? 1 : 0.55,
-              transition: "all 0.15s",
-            }}
-          >
-            Delete
-          </button>
-        </PlanGatedDeleteTooltip>
+        <PlanGatedDeleteButton
+          canDelete={canDelete}
+          upgradeHref={upgradeHref}
+          onClick={onDelete}
+        />
       </div>
     </div>
   );
@@ -15175,11 +15203,18 @@ function DiscountOverviewRow({
   suppressStorefrontActive,
   canDelete,
   upgradeHref,
+  isPlanLocked = false,
+  planLockedMessage = PLAN_LOCKED_ITEM_MESSAGE,
 }) {
   const storefrontActive =
     suppressStorefrontActive ? false : group.discountActive !== false;
   return (
-    <tr key={group.discountName}>
+    <tr
+      key={group.discountName}
+      className={planLockedRowClassName(isPlanLocked)}
+      title={isPlanLocked ? planLockedMessage : undefined}
+      aria-disabled={isPlanLocked || undefined}
+    >
       <td>
         <div className="disc-overview-discount-name">{group.discountName}</div>
         {group.tiers.length > 0 && (
@@ -15195,7 +15230,7 @@ function DiscountOverviewRow({
       <td className="disc-overview-storefront-active">
         <DiscountStorefrontToggle
           active={storefrontActive}
-          disabled={!onToggleActive}
+          disabled={!onToggleActive || isPlanLocked}
           onChange={(next) => onToggleActive?.(next)}
         />
       </td>
@@ -15222,20 +15257,16 @@ function DiscountOverviewRow({
             type="button"
             variant="secondary"
             icon="edit"
-            onClick={onConfigure}>
+            disabled={isPlanLocked}
+            title={isPlanLocked ? planLockedMessage : undefined}
+            onClick={isPlanLocked ? undefined : onConfigure}>
 
           </s-button>
-          <PlanGatedDeleteTooltip canDelete={canDelete} upgradeHref={upgradeHref}>
-            <s-button
-              type="button"
-              variant="danger"
-              icon="delete"
-              className="disc-delete-icon"
-              tone="critical"
-              disabled={!canDelete}
-              onClick={canDelete ? onDelete : undefined}
-            />
-          </PlanGatedDeleteTooltip>
+          <PlanGatedDeleteButton
+            canDelete={canDelete}
+            upgradeHref={upgradeHref}
+            onClick={onDelete}
+          />
         </div>
       </td>
     </tr>
@@ -15258,15 +15289,25 @@ export default function DiscountsIndex() {
     previewTier = null,
     previewSubtotal = 0,
     shopCurrencyCode = "USD",
-    billingPlan = null,
+    billingPlan: loaderBillingPlan = null,
   } = useLoaderData() ?? {};
-  const { onboarding } = useOutletContext() || {};
+  const { onboarding, billingPlan: outletBillingPlan } = useOutletContext() || {};
+  const billingPlan = loaderBillingPlan ?? outletBillingPlan;
   const isPremium = Boolean(billingPlan?.isPremium);
   const canDeleteRecords = isPremium;
   const billingUpgradeHref = useBillingUpgradeHref();
   const maxTierDiscounts = billingPlan?.limits?.maxDiscounts ?? null;
   const tierDiscountLimitMessage =
     maxTierDiscounts != null ? freePlanDiscountLimitMessage(maxTierDiscounts) : "";
+  const isDiscountPlanLocked = useCallback(
+    (discountName) =>
+      !isDiscountEditableOnPlan(
+        billingPlan?.planId,
+        discountName,
+        billingPlan?.planSlots,
+      ),
+    [billingPlan?.planId, billingPlan?.planSlots],
+  );
   const actionData = useActionData();
   const revalidator = useRevalidator();
   const location = useLocation();
@@ -15363,7 +15404,7 @@ export default function DiscountsIndex() {
   const [overviewPage, setOverviewPage] = useState(1);
   const [overviewPageSize, setOverviewPageSize] = useState(5);
   const [overviewQuery, setOverviewQuery] = useState("");
-  const [overviewSort, setOverviewSort] = useState("updated_desc");
+  const [overviewSort, setOverviewSort] = useState("created_asc");
   const [showDeleteDiscountModal, setShowDeleteDiscountModal] = useState(false);
   const [pendingDeleteDiscountName, setPendingDeleteDiscountName] = useState("");
   const [showNoticeModal, setShowNoticeModal] = useState(false);
@@ -15578,6 +15619,10 @@ export default function DiscountsIndex() {
     () => String(discountEditOriginalName || discountEditName || "").trim(),
     [discountEditOriginalName, discountEditName],
   );
+  const tierModalPlanLocked = useMemo(
+    () => isDiscountPlanLocked(tierModalDiscountKey),
+    [isDiscountPlanLocked, tierModalDiscountKey],
+  );
   const modalDiscountHasPersisted = useMemo(() => {
     if (!tierModalDiscountKey) return false;
     return groupedTierDiscounts.some((g) => g.discountName === tierModalDiscountKey);
@@ -15733,9 +15778,12 @@ export default function DiscountsIndex() {
       if (overviewSort === "name_asc") return String(a.discountName || "").localeCompare(String(b.discountName || ""));
       if (overviewSort === "name_desc") return String(b.discountName || "").localeCompare(String(a.discountName || ""));
       if (overviewSort === "usage_desc") return Number(b.usageSum || 0) - Number(a.usageSum || 0);
-      const aTs = new Date(a.discountScheduleStartAt || 0).getTime();
-      const bTs = new Date(b.discountScheduleStartAt || 0).getTime();
-      return bTs - aTs;
+      if (overviewSort === "updated_desc") {
+        const aTs = new Date(a.discountScheduleStartAt || 0).getTime();
+        const bTs = new Date(b.discountScheduleStartAt || 0).getTime();
+        return bTs - aTs;
+      }
+      return (a.discountCreatedAt ?? 0) - (b.discountCreatedAt ?? 0);
     });
     return sorted;
   }, [groupedTierDiscounts, overviewQuery, overviewSort]);
@@ -17476,8 +17524,20 @@ export default function DiscountsIndex() {
       {!isPremium ? (
         <s-banner tone="info" heading={`${billingPlan?.planName ?? "Free"} plan`}>
           Up to {maxTierDiscounts ?? 2} discounts, tier label customization only.{" "}
-          <s-link href="/app/billing">Upgrade to Premium</s-link> for unlimited discounts and
+          <s-link href={billingUpgradeHref}>Upgrade to Premium</s-link> for unlimited discounts and
           advanced widget settings.
+        </s-banner>
+      ) : null}
+
+      {actionData?.ok === false && actionData?.error && typeof actionData.error === "string" ? (
+        <s-banner tone="critical" heading="Action failed">
+          {actionData.error}
+          {actionData.planUpgradeRequired ? (
+            <>
+              {" "}
+              <s-link href={billingUpgradeHref}>Upgrade Plan</s-link>
+            </>
+          ) : null}
         </s-banner>
       ) : null}
 
@@ -17735,7 +17795,7 @@ export default function DiscountsIndex() {
       {/* ── Tier Discount Setup Modal ─────────────────────────────────────── */}
       {showTierDiscountModal && (
         <div className="disc-modal-overlay">
-          <div className="disc-modal">
+          <div className={`disc-modal${tierModalPlanLocked ? " sce-plan-locked-modal" : ""}`}>
             {/* Header */}
             <div className="disc-modal-header">
               <div>
@@ -17752,6 +17812,13 @@ export default function DiscountsIndex() {
               >✕</button>
             </div>
 
+            {tierModalPlanLocked ? (
+              <div className={PLAN_LOCKED_PANEL_CLASS}>
+                {PLAN_LOCKED_ITEM_MESSAGE}{" "}
+                <s-link href={billingUpgradeHref}>Upgrade to Premium</s-link> to edit this discount.
+              </div>
+            ) : null}
+
             {/* ── Section 1: Discount Details ── */}
             <div style={{ borderBottom: "1px solid #e5e7eb", paddingBottom: 20, marginBottom: 20 }}>
               <div style={{ fontSize: 14, fontWeight: 700, color: "#111827", marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
@@ -17765,6 +17832,7 @@ export default function DiscountsIndex() {
                     id="discountEditNameField"
                     type="text"
                     value={discountEditName}
+                    disabled={tierModalPlanLocked}
                     onChange={(e) => setDiscountEditName(readInputText(e, discountEditName))}
                     placeholder="e.g. Summer Sale, VIP Rewards…"
                     className={(actionData?.errors?.discountName || discountNameIsDuplicate) ? "has-error" : ""}
@@ -18237,10 +18305,13 @@ export default function DiscountsIndex() {
                       totalDiscountUsageCount={totalDiscountUsageCount}
                       canDelete={canDeleteRecords}
                       upgradeHref={billingUpgradeHref}
+                      isPlanLocked={isDiscountPlanLocked(group.discountName)}
+                      planLockedMessage={PLAN_LOCKED_ITEM_MESSAGE}
                       suppressStorefrontActive={
                         suppressStorefrontActiveName === group.discountName
                       }
                       onConfigure={() => {
+                        if (isDiscountPlanLocked(group.discountName)) return;
                         setDiscountEditName(group.discountName);
                         setDiscountEditOriginalName(group.discountName);
                         setDiscountEditActive(group.discountActive !== false);

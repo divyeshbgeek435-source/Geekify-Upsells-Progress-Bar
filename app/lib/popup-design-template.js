@@ -46,10 +46,11 @@ export function buildPopupTemplate({ name, popupDesignId, configJson, templateJs
 
 export function templateRenderPayload(template, fallbackConfigJson) {
   const render = template?.render && typeof template.render === "object" ? template.render : {};
-  const cfg =
-    render?.config && typeof render.config === "object"
-      ? render.config
-      : parsePopupDesignConfig(fallbackConfigJson || "{}");
+  const fromTemplate =
+    render?.config && typeof render.config === "object" ? render.config : {};
+  /** `configJson` is authoritative (pageTarget, timing, etc.); cached template.render may be stale. */
+  const fromDb = parsePopupDesignConfig(fallbackConfigJson || "{}");
+  const cfg = { ...fromTemplate, ...fromDb };
   return {
     popupDesignId: String(template?.popupDesignId || cfg.popupDesignId || "").trim(),
     config: cfg,

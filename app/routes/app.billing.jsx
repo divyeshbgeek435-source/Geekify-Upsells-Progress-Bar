@@ -26,7 +26,7 @@ import {
 
 export const loader = async ({ request }) => {
   const { billing, session } = await authenticate.admin(request);
-  const billingCtx = await loadShopBillingContext(billing);
+  const billingCtx = await loadShopBillingContext(billing, session.shop);
   const shop = session.shop;
   const [announcementHeaders, announcementBodies, popupCount, discountCount] =
     await Promise.all([
@@ -216,7 +216,7 @@ export default function BillingPage() {
         </s-banner>
       ) : null}
 
-      <s-section>
+      {/* <s-section>
         <s-stack direction="block" gap="base">
           <s-text>
             You are on the <strong>{planName}</strong> plan.
@@ -234,7 +234,7 @@ export default function BillingPage() {
               : ` Bodies: ${usage.announcementBodies} (unlimited).`}
           </s-text>
         </s-stack>
-      </s-section>
+      </s-section> */}
 
       <s-section heading="Choose a plan">
         <div

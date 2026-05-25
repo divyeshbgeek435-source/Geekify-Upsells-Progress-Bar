@@ -66,6 +66,9 @@ const CONFIG_DEFAULTS = {
   /** 0 = unlimited storefront impressions (per browser); each time the modal is shown counts once. */
   maxImpressions: 0,
   pageTarget: "all",
+  /** Full storefront path for pageTarget "exact", e.g. /products/gift-card */
+  exactPageUrl: "",
+  /** @deprecated use exactPageUrl */
   customPathContains: "",
   leftImageUrl: "",
   leftImageAlt: "",
@@ -170,6 +173,28 @@ export function sanitizePopupModalBackgroundImageUrl(url) {
   return sanitizePopupLeftImageUrl(url);
 }
 
+function normalizePopupPageTargetInConfig(raw) {
+  const t = String(raw || "all").trim();
+  if (t === "all" || t === "home" || t === "exact") return t;
+  if (t === "custom" || t === "url") return "exact";
+  return "all";
+}
+
+function normalizePopupPathInConfig(raw) {
+  let path = String(raw || "/").trim() || "/";
+  if (/^https?:\/\//i.test(path)) {
+    try {
+      path = new URL(path).pathname;
+    } catch {
+      /* fall through */
+    }
+  }
+  if (!path.startsWith("/")) path = `/${path}`;
+  path = path.toLowerCase().split("?")[0].split("#")[0];
+  if (path.length > 1 && path.endsWith("/")) path = path.replace(/\/+$/, "");
+  return path || "/";
+}
+
 function baseConfigShape() {
   return { ...CONFIG_DEFAULTS };
 }
@@ -190,6 +215,12 @@ export function parsePopupDesignConfig(json) {
     raw = {};
   }
   const merged = { ...baseConfigShape(), ...raw };
+  if (merged.pageTarget == null && raw.page_target != null) {
+    merged.pageTarget = raw.page_target;
+  }
+  if (!merged.exactPageUrl && raw.exact_page_url) {
+    merged.exactPageUrl = raw.exact_page_url;
+  }
   merged.designTemplateId = String(merged.designTemplateId ?? "").trim();
   merged.popupDesignId = String(merged.popupDesignId ?? "").trim();
   merged.headline = String(merged.headline ?? CONFIG_DEFAULTS.headline).trim() || CONFIG_DEFAULTS.headline;
@@ -215,11 +246,11 @@ export function parsePopupDesignConfig(json) {
   merged.maxImpressions = Number.isFinite(maxImp)
     ? Math.max(0, Math.min(10000, Math.round(maxImp)))
     : CONFIG_DEFAULTS.maxImpressions;
-  merged.pageTarget = String(merged.pageTarget || CONFIG_DEFAULTS.pageTarget).trim();
-  if (!["all", "home", "product", "collection", "cart", "custom"].includes(merged.pageTarget)) {
-    merged.pageTarget = CONFIG_DEFAULTS.pageTarget;
-  }
-  merged.customPathContains = String(merged.customPathContains || "").trim();
+  merged.pageTarget = normalizePopupPageTargetInConfig(merged.pageTarget);
+  const exactRaw = String(merged.exactPageUrl || merged.customPathContains || "").trim();
+  merged.exactPageUrl =
+    merged.pageTarget === "exact" && exactRaw ? normalizePopupPathInConfig(exactRaw) : "";
+  merged.customPathContains = "";
   merged.leftImageUrl = sanitizePopupLeftImageUrl(merged.leftImageUrl);
   merged.leftImageAlt = String(merged.leftImageAlt ?? "").trim();
   merged.copyCouponButtonText =

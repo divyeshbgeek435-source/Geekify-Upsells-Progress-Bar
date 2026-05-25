@@ -5,6 +5,13 @@ import shopify from "../shopify.server";
 import { authenticateAppProxyRequest, prismaShopInClause } from "../lib/app-proxy.server.js";
 import { parsePopupDesignConfig, resolvePopupDesignId } from "../lib/popup-design-config.js";
 import { templateRenderPayload } from "../lib/popup-design-template.js";
+import {
+  matchesPopupPageTarget,
+  normalizePathname,
+  pathMatchesPageTarget,
+  resolveStorefrontTargeting,
+  selectBestActivePopupRow,
+} from "../lib/popup-page-target.shared.js";
 import prisma from "../db.server";
 
 const BAR_TYPE = "popup_design";
@@ -98,7 +105,6 @@ async function findCustomerByEmailWithMeta(admin, email) {
     seen.add(q);
     try {
       const response = await admin.graphql(FIND_CUSTOMER_BY_EMAIL_QUERY, { variables: { q } });
-      console.log("response=========>", response);
       const json = await response.json();
       if (graphQlErrorsLookLikeProtectedCustomerData(json?.errors)) {
         return { customer: null, lookupBlocked: true };
@@ -107,7 +113,6 @@ async function findCustomerByEmailWithMeta(admin, email) {
       const edges = json?.data?.customers?.edges || [];
       if (edges[0]?.node) return { customer: edges[0].node, lookupBlocked: false };
     } catch (err) {
-      console.log("err=========>", err);
       if (isProtectedCustomerDataAccessError(err)) {
         return { customer: null, lookupBlocked: true };
       }
@@ -118,7 +123,6 @@ async function findCustomerByEmailWithMeta(admin, email) {
 }
 
 function jsonNoStore(data, status = 200) {
-  console.log("data=========>", data);
   const headers = {
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "private, no-store, no-cache, must-revalidate, max-age=0",
@@ -176,7 +180,7 @@ export const loader = async ({ request }) => {
   const rows = await prisma.popupDesign.findMany({
     where: shopWhere,
     orderBy: { updatedAt: "desc" },
-    select: { id: true, updatedAt: true, popupDesignId: true, configJson: true, templateJson: true },
+    select: { id: true, updatedAt: true, active: true, popupDesignId: true, configJson: true, templateJson: true },
   });
 
   let row = null;
@@ -190,19 +194,56 @@ export const loader = async ({ request }) => {
         break;
       }
     }
-  } else if (rows.length === 1) {
-    // Backward compatibility: single saved popup, theme block without query param
-    row = rows[0];
+    if (row && !row.active) {
+      return noStoreJson({ ok: false, error: "popup_inactive", matched: false }, 404);
+    }
+    const pagePathById = url.searchParams.get("page_path") || "";
+    const pageTypeById = url.searchParams.get("page_type") || "";
+    if (row && pagePathById) {
+      const parsedById = parsePopupDesignConfig(row.configJson);
+      if (!pathMatchesPageTarget(normalizePathname(pagePathById), parsedById, pageTypeById)) {
+        return noStoreJson(
+          {
+            ok: false,
+            error: "page_target_mismatch",
+            matched: false,
+            hint: "This popup is not configured for the current page path.",
+          },
+          404,
+        );
+      }
+    }
+  } else {
+    const pagePath = url.searchParams.get("page_path") || "";
+    const pageType = url.searchParams.get("page_type") || "";
+    if (!pagePath) {
+      return noStoreJson(
+        { ok: false, error: "page_path_required", matched: false },
+        400,
+      );
+    }
+    row = selectBestActivePopupRow(rows, pagePath, pageType);
+  }
+
+  const pagePathForMatch = url.searchParams.get("page_path") || "";
+  const pageTypeForMatch = url.searchParams.get("page_type") || "";
+  if (row && pagePathForMatch) {
+    const parsedForPath = parsePopupDesignConfig(row.configJson);
+    if (!pathMatchesPageTarget(normalizePathname(pagePathForMatch), parsedForPath, pageTypeForMatch)) {
+      row = null;
+    }
   }
 
   if (!row) {
     return noStoreJson(
       {
         ok: false,
-        error: requestedDesignId ? "popup_not_found" : "popup_design_id_required",
+        error: requestedDesignId ? "popup_not_found" : "no_active_popup",
         matched: false,
+        hint:
+          "No active popup matches this page. For All pages: turn Display on with Target pages = All pages and enable the site-wide app embed. For Exact URL: save the full path (e.g. /products/handle).",
       },
-      requestedDesignId ? 404 : 400,
+      404,
     );
   }
 
@@ -213,8 +254,21 @@ export const loader = async ({ request }) => {
       return {};
     }
   })();
+  const parsedRowCfg = parsePopupDesignConfig(row.configJson);
+  const targeting = resolveStorefrontTargeting(parsedRowCfg);
   const payload = templateRenderPayload(template, row.configJson);
-  const config = { ...payload.config, popupDesignId: payload.popupDesignId || row.popupDesignId };
+  const resolvedPopupDesignId =
+    resolvePopupDesignId(parsedRowCfg, row.id) ||
+    String(payload.popupDesignId || row.popupDesignId || "").trim();
+  const { pageTarget: _stalePt, exactPageUrl: _staleEu, customPathContains: _staleCp, ...templateConfigRest } =
+    payload.config || {};
+  const config = {
+    ...templateConfigRest,
+    ...parsedRowCfg,
+    ...targeting,
+    popupDesignId: resolvedPopupDesignId,
+    layoutMode: parsedRowCfg.layoutMode,
+  };
 
   /** GET verify: same payload as POST `intent: verify_customer` (some proxies handle GET more reliably). */
   if (url.searchParams.get("intent") === "verify_customer") {
@@ -225,17 +279,15 @@ export const loader = async ({ request }) => {
     if (!isValidPopupSignupEmail(emailQ)) {
       return noStoreJson({ ok: false, error: "validation", message: "invalid_email" }, 400);
     }
-    if (parsed.emailCaptureEnabled !== true) {
+    if (parsedRowCfg.emailCaptureEnabled !== true) {
       return noStoreJson({ ok: false, error: "email_capture_disabled" }, 403);
     }
-    if (parsed.shopifyCustomerCreateEnabled !== true) {
+    if (parsedRowCfg.shopifyCustomerCreateEnabled !== true) {
       return noStoreJson({ ok: false, error: "verify_disabled" }, 403);
     }
     try {
       const { admin } = await shopify.unauthenticated.admin(shop);
-      console.log("admin=========>", admin, emailQ);
       const { customer: node, lookupBlocked } = await findCustomerByEmailWithMeta(admin, emailQ);
-      console.log("node=========>", node, lookupBlocked);
       // if (lookupBlocked) {
       //   return noStoreJson(
       //     {
@@ -280,14 +332,26 @@ export const loader = async ({ request }) => {
   const subscriberCount = await prisma.popupSignup.count({
     where: { shop, popupDesignId: config.popupDesignId },
   });
+  const requestPath = normalizePathname(pagePathForMatch || url.searchParams.get("page_path") || "");
+  const requestPageType = String(pageTypeForMatch || url.searchParams.get("page_type") || "").toLowerCase();
+  const pageMatched = matchesPopupPageTarget(
+    { pathname: requestPath, pageType: requestPageType },
+    parsedRowCfg,
+  );
   const body = JSON.stringify({
     ok: true,
     id: row.id,
+    popupDesignId: resolvedPopupDesignId,
+    active: Boolean(row.active),
     version: `${row.id}:${row.updatedAt?.toISOString?.() || ""}:${configFingerprint}`,
     updatedAt: row.updatedAt?.toISOString?.() || null,
     config,
     subscriberCount,
-    matched: true,
+    matched: pageMatched,
+    pageTarget: targeting.pageTarget,
+    exactPageUrl: targeting.exactPageUrl,
+    requestPath,
+    requestPageType,
     template,
   });
 
@@ -341,7 +405,7 @@ export const action = async ({ request }) => {
 
   const rows = await prisma.popupDesign.findMany({
     where: shopWhere,
-    select: { id: true, popupDesignId: true, configJson: true, templateJson: true },
+    select: { id: true, active: true, popupDesignId: true, configJson: true, templateJson: true },
   });
 
   let row = null;
@@ -357,6 +421,9 @@ export const action = async ({ request }) => {
 
   if (!row) {
     return jsonNoStore({ ok: false, error: "popup_not_found" }, 404);
+  }
+  if (!row.active) {
+    return jsonNoStore({ ok: false, error: "popup_inactive" }, 404);
   }
 
   const parsedCfg = parsePopupDesignConfig(row.configJson);
@@ -439,7 +506,6 @@ export const action = async ({ request }) => {
       const payloadCreate = json?.data?.customerCreate;
       /** PCD warnings can appear as top-level `errors` even when `customerCreate.customer.id` is present. */
       const createdCustomerId = payloadCreate?.customer?.id;
-      console.log("json.errors=========>", createdCustomerId);
       if (json?.errors?.length) {
         // if (graphQlErrorsLookLikeProtectedCustomerData(json.errors)) {
         //   if (!createdCustomerId) {

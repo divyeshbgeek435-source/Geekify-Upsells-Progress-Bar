@@ -224,9 +224,21 @@
     hasRenderedAtLeastOnce = true;
   }
 
+  function hideBar() {
+    removeExisting();
+    lastRenderVersion = "";
+  }
+
+  function shouldRenderBodyAnnouncement(data) {
+    if (!data || data.ok !== true || data.active !== true) return false;
+    if (!sectionIdFilter) return false;
+    var cfg = data.config || {};
+    return matchesConfiguredSection(cfg);
+  }
+
   function refresh() {
-    if (!apiUrl) {
-      render({});
+    if (!apiUrl || !sectionIdFilter) {
+      hideBar();
       return;
     }
     var endpoint = apiUrl;
@@ -240,8 +252,8 @@
         });
       })
       .then(function (wrapped) {
-        if (!wrapped || !wrapped.data || !wrapped.data.ok) {
-          if (!hasRenderedAtLeastOnce) render({});
+        if (!shouldRenderBodyAnnouncement(wrapped && wrapped.data)) {
+          hideBar();
           return;
         }
         var data = wrapped.data;
@@ -249,9 +261,10 @@
         if (nextVersion && nextVersion === lastRenderVersion) return;
         render(data.config || {});
         lastRenderVersion = nextVersion;
+        hasRenderedAtLeastOnce = true;
       })
       .catch(function () {
-        if (!hasRenderedAtLeastOnce) render({});
+        hideBar();
       });
   }
 

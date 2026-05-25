@@ -1,15 +1,21 @@
 (function () {
   var inThemeEditor = Boolean(window.Shopify && window.Shopify.designMode);
-  var script = document.currentScript;
-  if (!script || !script.dataset || !script.dataset.scePopup) {
-    var candidates = document.querySelectorAll("script[data-sce-popup][data-sce-popup-hook]");
-    for (var i = 0; i < candidates.length; i++) {
-      if (candidates[i].getAttribute("data-sce-popup-ran") !== "1") {
-        script = candidates[i];
-        break;
-      }
+
+  function findPopupScript() {
+    var s = document.currentScript;
+    if (s && s.hasAttribute && s.hasAttribute("data-sce-popup")) return s;
+    var auto = document.querySelectorAll('script[data-sce-popup][data-sce-popup-auto="1"]');
+    for (var a = 0; a < auto.length; a++) {
+      if (auto[a].getAttribute("data-sce-popup-ran") !== "1") return auto[a];
     }
+    var hooked = document.querySelectorAll("script[data-sce-popup][data-sce-popup-hook]");
+    for (var h = 0; h < hooked.length; h++) {
+      if (hooked[h].getAttribute("data-sce-popup-ran") !== "1") return hooked[h];
+    }
+    return null;
   }
+
+  var script = findPopupScript();
   if (!script || !script.dataset) return;
   var dedupeId = String(script.dataset.scePopupDesignId || "").trim();
   var dedupeKey = "__scePopupSingleton_" + (dedupeId || "default");
@@ -20,15 +26,26 @@
     /* ignore */
   }
   script.setAttribute("data-sce-popup-ran", "1");
+  try {
+    window.__scePopupScriptLoaded = true;
+  } catch (_loaded) {}
 
   var popupDesignIdFilter = String(script.dataset.scePopupDesignId || "").trim();
   var apiUrl = String(script.dataset.apiUrl || "").trim();
+  var isAuto = String(script.dataset.scePopupAuto || "").trim() === "1";
   var zIndex = Math.max(1, Number(script.dataset.zIndex || "100000") || 100000);
-  var refreshIntervalMs = 5000;
+  var refreshIntervalMs = 3000;
   var lastTickSig = "";
+  /** Closed this page load (theme editor + storefront); cleared only on full navigation/reload. */
+  var sessionDismissed = {};
   var countdownTimer = null;
   var pendingShowTimeout = null;
   var rootEl = null;
+
+  function isDismissedThisSession(cfg) {
+    var id = String((cfg || {}).popupDesignId || "").trim();
+    return Boolean(id && sessionDismissed[id]);
+  }
 
   function dismissStorageKey(designId) {
     return "sce_popup_dismissed_" + String(designId || "").trim();
@@ -73,17 +90,65 @@
     lsSet(k, String(n));
   }
 
-  function pathParts(path) {
-    return String(path || "/")
-      .toLowerCase()
-      .split("?")[0]
-      .split("#")[0]
-      .split("/")
-      .filter(Boolean);
+  function normalizePageTarget(raw) {
+    var t = String(raw || "all").trim();
+    if (t === "all" || t === "home" || t === "exact") return t;
+    if (t === "custom" || t === "url") return "exact";
+    return "all";
   }
 
-  function isLikelyMarketLocaleSegment(seg) {
-    return /^[a-z]{2}(-[a-z]{2})?$/.test(String(seg || ""));
+  function readPageType() {
+    var fromScript = String(script.dataset.scePageType || "").trim().toLowerCase();
+    if (fromScript) return fromScript;
+    var tagged = document.querySelector("script[data-sce-popup][data-sce-page-type]");
+    if (tagged) {
+      return String(tagged.getAttribute("data-sce-page-type") || "").trim().toLowerCase();
+    }
+    return "";
+  }
+
+  function getExactPageUrl(cfg) {
+    var raw = String((cfg || {}).exactPageUrl || (cfg || {}).customPathContains || "").trim();
+    if (!raw) return "";
+    return normalizeStorefrontPath(raw);
+  }
+
+  function stripOptionalLocalePrefix(pathnameNorm) {
+    var path = normalizeStorefrontPath(pathnameNorm);
+    var parts = path.split("/").filter(Boolean);
+    if (parts.length > 1 && /^[a-z]{2}(-[a-z]{2})?$/.test(parts[0])) {
+      return "/" + parts.slice(1).join("/");
+    }
+    return path;
+  }
+
+  function storefrontPathsEqual(pathnameRaw, exactRaw) {
+    var path = normalizeStorefrontPath(pathnameRaw);
+    var exact = normalizeStorefrontPath(exactRaw);
+    if (!exact || exact === "/") return false;
+    if (path === exact) return true;
+    return stripOptionalLocalePrefix(path) === exact;
+  }
+
+  /** Prefer API top-level targeting over stale template fields in data.config. */
+  function applyServerTargeting(cfg, data) {
+    var out = Object.assign({}, cfg || {});
+    if (!data) return out;
+    if (data.pageTarget != null && String(data.pageTarget).trim() !== "") {
+      out.pageTarget = normalizePageTarget(data.pageTarget);
+    } else {
+      out.pageTarget = normalizePageTarget(out.pageTarget);
+    }
+    if (out.pageTarget === "exact") {
+      var exactRaw =
+        data.exactPageUrl != null && String(data.exactPageUrl).trim() !== ""
+          ? data.exactPageUrl
+          : out.exactPageUrl || out.customPathContains || "";
+      out.exactPageUrl = normalizeStorefrontPath(exactRaw);
+    } else {
+      out.exactPageUrl = "";
+    }
+    return out;
   }
 
   function isValidEmailForCapture(v) {
@@ -92,34 +157,49 @@
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
   }
 
+  function normalizeStorefrontPath(raw) {
+    var path = String(raw || "/").trim() || "/";
+    if (/^https?:\/\//i.test(path)) {
+      try {
+        path = new URL(path).pathname;
+      } catch (_url) {
+        /* keep raw */
+      }
+    }
+    if (path.charAt(0) !== "/") path = "/" + path;
+    path = path.toLowerCase().split("?")[0].split("#")[0];
+    if (path.length > 1 && path.charAt(path.length - 1) === "/") {
+      path = path.replace(/\/+$/, "");
+    }
+    return path || "/";
+  }
+
+  function isHome(path, pageType) {
+    var normalized = normalizeStorefrontPath(path);
+    return pageType === "index" || normalized === "/" || normalized === "";
+  }
+
+  /** One rule at a time: all | home (index or /) | exact path. */
   function matchesPageTarget(cfg) {
-    var target = String((cfg || {}).pageTarget || "all").trim();
-    var path = String(window.location.pathname || "/").toLowerCase();
-    path = path.split("?")[0].split("#")[0];
-    var custom = String((cfg || {}).customPathContains || "").trim().toLowerCase();
-    var parts = pathParts(path);
+    var target = normalizePageTarget((cfg || {}).pageTarget);
+    var path = normalizeStorefrontPath(window.location.pathname || "/");
+    var pageType = readPageType();
 
     if (target === "all") return true;
 
     if (target === "home") {
-      if (path === "/" || path === "") return true;
-      if (parts.length === 1 && isLikelyMarketLocaleSegment(parts[0])) return true;
-      if (parts.length === 1 && parts[0] === "index") return true;
-      if (/\/pages\/home\b/i.test(path)) return true;
-      return false;
+      return isHome(path, pageType);
     }
 
-    if (target === "product") return parts.indexOf("products") !== -1;
-    if (target === "collection") return parts.indexOf("collections") !== -1;
-    if (target === "cart") {
-      var last = parts[parts.length - 1];
-      return last === "cart";
+    if (target === "exact") {
+      return storefrontPathsEqual(path, getExactPageUrl(cfg));
     }
-    if (target === "custom") return Boolean(custom && path.indexOf(custom) !== -1);
-    return true;
+
+    return false;
   }
 
   function isSuppressed(cfg) {
+    if (isDismissedThisSession(cfg)) return true;
     if (inThemeEditor) return false;
     var id = String((cfg || {}).popupDesignId || "").trim();
     if (!id) return true;
@@ -141,6 +221,12 @@
   function markDismissed(cfg) {
     var id = String((cfg || {}).popupDesignId || "").trim();
     if (!id) return;
+    sessionDismissed[id] = true;
+    if (pendingShowTimeout) {
+      clearTimeout(pendingShowTimeout);
+      pendingShowTimeout = null;
+    }
+    if (inThemeEditor) return;
     var mode = String((cfg || {}).showMode || "repeat").trim();
     var repeatMs = Math.max(60000, (Number((cfg || {}).repeatFrequencyMinutes) || 60) * 60000);
     try {
@@ -184,9 +270,49 @@
     }
   }
 
+  function alternateShortPath(primaryBase) {
+    var b = String(primaryBase || "").trim();
+    if (b.indexOf("/apps/sce/") !== 0) return "";
+    return b.slice("/apps/sce".length) || "/";
+  }
+
+  function uniqueStrings(list) {
+    var out = [];
+    var seen = {};
+    for (var i = 0; i < list.length; i++) {
+      var s = String(list[i] || "").trim();
+      if (!s || seen[s]) continue;
+      seen[s] = true;
+      out.push(s);
+    }
+    return out;
+  }
+
+  function popupQueryString() {
+    var parts = [];
+    if (popupDesignIdFilter) {
+      parts.push("popup_design_id=" + encodeURIComponent(popupDesignIdFilter));
+    }
+    var path = String(window.location.pathname || "/") || "/";
+    parts.push("page_path=" + encodeURIComponent(path));
+    var pageType = readPageType();
+    if (pageType) parts.push("page_type=" + encodeURIComponent(pageType));
+    return parts.join("&");
+  }
+
+  function popupFetchUrls() {
+    var qs = popupQueryString();
+    var primary = String(apiUrl || "").trim() || "/apps/sce/popup-design";
+    var bases = uniqueStrings([primary, alternateShortPath(primary), "/apps/sce/popup-design"]);
+    return bases.map(function (base) {
+      var sep = base.indexOf("?") >= 0 ? "&" : "?";
+      return base + sep + qs;
+    });
+  }
+
   function matchesConfigured(cfg) {
     var want = popupDesignIdFilter;
-    if (!want) return false;
+    if (!want) return true;
     var have = String((cfg || {}).popupDesignId || "").trim();
     return have === want;
   }
@@ -345,10 +471,9 @@
   }
 
   function buildPopup(cfg) {
-    console.log("cfg=========>", cfg);
     if (!matchesConfigured(cfg)) return null;
     var designId = String(cfg.popupDesignId || "").trim();
-    if (!inThemeEditor && isSuppressed(cfg)) return null;
+    if (isSuppressed(cfg)) return null;
 
     var overlay = document.createElement("div");
     overlay.className = "sce-popup-overlay";
@@ -630,7 +755,6 @@
       var stayInPopup = wantCustomer && cfg.customerCreateStayInPopup !== false;
 
       function parseProxyJsonBody(text) {
-        console.log("text=========>", text);
         var raw = String(text || "").replace(/^\uFEFF/, "").trim();
         if (!raw) return { data: null, parseOk: false };
         function tryParse(s) {
@@ -672,8 +796,6 @@
       }
 
       function postSignupJson(body) {
-        console.log("apiUrl=========>", apiUrl);
-        console.log("body=========>", body);
         return fetch(apiUrl, {
           method: "POST",
           credentials: "same-origin",
@@ -684,16 +806,13 @@
           },
           body: JSON.stringify(body),
         }).then(function (r) {
-          console.log("r=========>", r);
           var headerSubscribeOk =
             r.ok &&
             String(r.headers.get("X-Sce-Popup-Subscribe") || "")
               .trim()
               .toLowerCase() === "ok";
           return r.text().then(function (t) {
-            console.log("t=========>", t);
             var parsed = parseProxyJsonBody(t);
-            console.log("parsed=========>", parsed);
             var bodyLooksSubscribeOk = r.ok && bodyLooksLikePopupSubscribeSuccess(t);
             return {
               httpOk: r.ok,
@@ -1000,7 +1119,6 @@
           }
 
           function finishSubscribeSuccess(data) {
-            console.log("data=========>", data);
             done();
             if (typeof clearErr === "function") clearErr();
             applySubscribeSuccess(data, emailVal, nameVal);
@@ -1222,38 +1340,115 @@
     }, delay);
   }
 
-  function refresh() {
-    if (!apiUrl) return;
-    fetch(apiUrl, {
+  function fetchPopupConfig(index, urls) {
+    if (!urls.length) return Promise.resolve({ status: 404, data: null, fetchUrl: "" });
+    var fetchUrl = urls[index];
+    return fetch(fetchUrl, {
       credentials: "same-origin",
       cache: "no-store",
       headers: { Accept: "application/json" },
-    })
-      .then(function (r) {
-        return r.json().then(function (data) {
-          return { status: r.status, data: data };
-        });
-      })
+    }).then(function (r) {
+      var ct = String(r.headers.get("content-type") || "").toLowerCase();
+      if (ct.indexOf("application/json") === -1) {
+        if (index + 1 < urls.length) return fetchPopupConfig(index + 1, urls);
+        return { status: r.status, data: null, fetchUrl: fetchUrl };
+      }
+      return r.json().then(function (data) {
+        if (data && data.ok === true) return { status: r.status, data: data, fetchUrl: fetchUrl };
+        var retryable =
+          r.status >= 500 ||
+          !data ||
+          data.error === "empty_body" ||
+          data.error === "missing_shop" ||
+          data.error === "app_proxy_auth_failed";
+        if (index + 1 < urls.length && retryable) {
+          return fetchPopupConfig(index + 1, urls);
+        }
+        return { status: r.status, data: data, fetchUrl: fetchUrl };
+      });
+    });
+  }
+
+  function refresh() {
+    var urls = popupFetchUrls();
+    if (!urls.length) return;
+    fetchPopupConfig(0, urls)
       .then(function (wrapped) {
-        if (!wrapped || !wrapped.data || !wrapped.data.ok) {
+        var fetchUrl = wrapped && wrapped.fetchUrl ? wrapped.fetchUrl : urls[0];
+        if (!wrapped || !wrapped.data || wrapped.data.ok !== true || wrapped.data.active === false) {
           removePopup();
+          if (!wrapped || !wrapped.data || wrapped.data.ok !== true) {
+            lastTickSig = "";
+            if (!window.__scePopupProxyWarned) {
+              window.__scePopupProxyWarned = true;
+              if (wrapped && wrapped.data === null && wrapped.status && wrapped.status !== 200) {
+                console.warn(
+                  "[SCE Popup] App proxy returned non-JSON (HTTP " +
+                    wrapped.status +
+                    "). Enable Theme → App embeds → Geekify storefront, deploy the app, and open /apps/sce/health on your store.",
+                  fetchUrl,
+                );
+              } else if (wrapped && wrapped.data && wrapped.data.error) {
+                var errHint =
+                  wrapped.data.error === "no_active_popup"
+                    ? "Turn Display on for a popup with Exact URL matching this page (or All pages), then Save."
+                    : wrapped.data.error === "popup_inactive"
+                      ? "That popup is saved but Display is off in the app."
+                      : wrapped.data.hint || "";
+                console.warn("[SCE Popup] " + wrapped.data.error + (errHint ? " — " + errHint : ""), fetchUrl);
+              }
+            }
+          }
           return;
         }
         var data = wrapped.data;
-        var cfg = data.config || {};
+        if (data.matched === false) {
+          removePopup();
+          if (!window.__scePopupTargetWarned) {
+            window.__scePopupTargetWarned = true;
+            console.warn("[SCE Popup] Server says this page does not match popup targeting.", {
+              pageTarget: data.pageTarget,
+              exactPageUrl: data.exactPageUrl || "",
+              pathname: normalizeStorefrontPath(window.location.pathname || "/"),
+              pageType: readPageType(),
+              hint: data.hint || "",
+            });
+          }
+          return;
+        }
+        var cfg = applyServerTargeting(data.config || {}, data);
         if (typeof data.subscriberCount === "number") {
           cfg.subscriberCount = data.subscriberCount;
         }
+        var resolvedId = String(cfg.popupDesignId || data.popupDesignId || "").trim();
+        if (!resolvedId && data.id != null) {
+          resolvedId = "popup-" + String(data.id);
+        }
+        if (resolvedId) cfg.popupDesignId = resolvedId;
         if (!matchesConfigured(cfg)) {
           removePopup();
           return;
         }
         var nextVersion = String(data.version || "");
-        var pathKey = String(window.location.pathname || "");
+        var pathKey = normalizeStorefrontPath(window.location.pathname || "/");
         var pageOk = matchesPageTarget(cfg) ? "1" : "0";
+        if (pageOk !== "1" && !window.__scePopupTargetWarned) {
+          window.__scePopupTargetWarned = true;
+          console.warn(
+            "[SCE Popup] Popup loaded from app but hidden on this page.",
+            {
+              pageTarget: cfg.pageTarget,
+              exactPageUrl: cfg.exactPageUrl || "",
+              pathname: pathKey,
+              pageType: readPageType(),
+              serverPageTarget: data.pageTarget,
+              serverExactPageUrl: data.exactPageUrl || "",
+            },
+          );
+        }
         var sup = isSuppressed(cfg) ? "1" : "0";
         var tickSig = nextVersion + "|" + pathKey + "|" + pageOk + sup;
-        if (tickSig === lastTickSig) return;
+        if (tickSig === lastTickSig && (rootEl || sup === "1")) return;
         lastTickSig = tickSig;
         if (pageOk !== "1" || sup === "1") {
           removePopup();
@@ -1266,14 +1461,27 @@
           window.__scePopupProxyWarned = true;
           console.warn(
             "[SCE Popup] Could not load popup config from app proxy:",
-            apiUrl,
+            fetchUrl,
             err && err.message ? err.message : err,
-            "- Deploy the app with [app_proxy], paste Popup design ID in Theme → App embeds → Popup design (site-wide), and test https://YOUR-STORE.myshopify.com/apps/sce/health",
+            "- Deploy the app with [app_proxy], enable Theme → App embeds → Geekify storefront, and test https://YOUR-STORE.myshopify.com/apps/sce/health",
           );
         }
       });
   }
 
+  function forceRefresh() {
+    lastTickSig = "";
+    refresh();
+  }
+
   refresh();
+  setTimeout(forceRefresh, 600);
+  setTimeout(forceRefresh, 1800);
   setInterval(refresh, refreshIntervalMs);
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden) forceRefresh();
+  });
+  window.addEventListener("pageshow", function (ev) {
+    if (ev.persisted) forceRefresh();
+  });
 })();

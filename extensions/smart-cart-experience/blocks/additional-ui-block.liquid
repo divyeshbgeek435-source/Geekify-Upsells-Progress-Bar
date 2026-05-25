@@ -30,17 +30,13 @@
   "settings": [
     {
       "type": "paragraph",
-      "content": "Paste the Section ID from the app (Announcement UI lab). The block renders only when the ID matches."
-    },
-    {
-      "type": "paragraph",
-      "content": "Important: This block does not use Announcement bars IDs/Section IDs."
+      "content": "Paste the Section ID from Announcements (Body / Announcement Section). The block only appears when Display is on in the app and this ID matches."
     },
     {
       "type": "text",
       "id": "section_id",
       "label": "Section ID",
-      "info": "Required for the bar to appear. Paste the Section ID from the app (Announcement UI lab). It must match exactly (including the default marquee-… id if you use that). The ID is not shown as customer-facing text; the live bar has data-sce-marquee-section-id on its root for debugging."
+      "info": "Required. Must match the section in the app. Display must be on in Announcements or this block stays hidden."
     },
     {
       "type": "select",

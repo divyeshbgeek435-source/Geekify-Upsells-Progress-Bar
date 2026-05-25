@@ -4,6 +4,7 @@ import {
   useLoaderData,
   useLocation,
   useNavigate,
+  useNavigation,
   useOutletContext,
   useRouteError,
   useSubmit,
@@ -21,18 +22,32 @@ import {
   handleAnnouncementsUnifiedAction,
 } from "../lib/announcements-admin.server.js";
 import { resolveSectionHtmlIdFromHeader } from "../lib/announcement-header-template.js";
-import { AnnouncementHeaderAdmin } from "./app.announcement-bars.jsx";
+import {
+  AnnouncementHeaderAdmin,
+  AnnouncementThemeSetupBanner,
+} from "./app.announcement-bars.jsx";
 import { AnnouncementBodyAdmin } from "./app.additional.jsx";
 import {
-  PlanGatedDeleteTooltip,
+  PlanGatedDeleteButton,
   useBillingUpgradeHref,
 } from "../components/plan-gated-delete.jsx";
 import { getPlanLimits } from "../lib/app-plans.shared.js";
+import { rejectIfAnnouncementFormLocked } from "../lib/plan-limit-enforcement.server.js";
+import {
+  isAnnouncementEditableOnPlan,
+  PLAN_LOCKED_ITEM_MESSAGE,
+} from "../lib/plan-limit-access.shared.js";
+import {
+  PLAN_LOCKED_CELL_CLASS,
+  PLAN_LOCKED_PANEL_CLASS,
+  planLockedRowClassName,
+  planLockedTableCellProps,
+} from "../components/plan-locked-visual.jsx";
 
 export const loader = async ({ request }) => {
   const { session, billing } = await authenticate.admin(request);
-  const billingPlan = await loadShopBillingContext(billing);
   const shop = session.shop;
+  const billingPlan = await loadShopBillingContext(billing, shop);
   const url = new URL(request.url);
   const kind = url.searchParams.get("kind") || "";
   const edit = url.searchParams.get("edit") || "";
@@ -63,6 +78,8 @@ export const loader = async ({ request }) => {
       id: b.id,
       name: b.name,
       sectionId: resolveSectionHtmlIdFromHeader(b),
+      active: Boolean(b.active),
+      createdAt: b.createdAt.getTime(),
       updatedAt: b.updatedAt.getTime(),
     })),
     ...bodyBlocks.map((b) => ({
@@ -70,9 +87,11 @@ export const loader = async ({ request }) => {
       id: b.rowId,
       name: b.name || `Additional UI ${b.config.sectionId}`,
       sectionId: b.config.sectionId,
+      active: Boolean(b.active),
+      createdAt: new Date(b.createdAt || b.updatedAt).getTime(),
       updatedAt: new Date(b.updatedAt).getTime(),
     })),
-  ].sort((a, b) => b.updatedAt - a.updatedAt);
+  ].sort((a, b) => a.createdAt - b.createdAt);
 
   return {
     shop,
@@ -85,23 +104,108 @@ export const loader = async ({ request }) => {
 
 export const action = async ({ request }) => {
   const { session, billing } = await authenticate.admin(request);
-  const billingPlan = await loadShopBillingContext(billing);
+  const shop = session.shop;
+  const billingPlan = await loadShopBillingContext(billing, shop);
   const form = await request.formData();
 
   const limitErr = await rejectIfAnnouncementCreateBlocked(
-    session.shop,
+    shop,
     billingPlan.planId,
     form,
   );
   if (limitErr) return limitErr;
 
-  if (String(form.get("intent") || "") === "delete") {
+  const lockErr = rejectIfAnnouncementFormLocked(
+    billingPlan.planId,
+    billingPlan.planSlots,
+    form,
+    { blockActivationOnly: true },
+  );
+  if (lockErr) return lockErr;
+
+  const intent = String(form.get("intent") || "");
+  if (intent !== "set_active") {
+    const editLockErr = rejectIfAnnouncementFormLocked(
+      billingPlan.planId,
+      billingPlan.planSlots,
+      form,
+    );
+    if (editLockErr) return editLockErr;
+  }
+
+  if (intent === "delete") {
     const deleteBlock = rejectIfDeleteNotAllowed(billingPlan.planId);
     if (deleteBlock) return deleteBlock;
   }
 
-  return handleAnnouncementsUnifiedAction(session.shop, form);
+  return handleAnnouncementsUnifiedAction(shop, form);
 };
+
+function AnnouncementDisplayToggle({ active, onChange, disabled, showLabel = true }) {
+  return (
+    <label
+      className={`ann-display-toggle${active ? " is-on" : ""}${disabled ? " is-disabled" : ""}`}
+      title={active ? "Shown on storefront" : "Hidden on storefront"}
+    >
+      <input
+        type="checkbox"
+        checked={active}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+        aria-label={active ? "Display on storefront: On" : "Display on storefront: Off"}
+      />
+      <span className="ann-display-toggle-track" aria-hidden="true">
+        <span className="ann-display-toggle-thumb" />
+      </span>
+      {showLabel ? (
+        <span className="ann-display-toggle-text">{active ? "On" : "Off"}</span>
+      ) : null}
+    </label>
+  );
+}
+
+function HeaderOverrideModal({ open, existingName, onCancel, onOverride }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return undefined;
+    if (open) {
+      if (!el.open) el.showModal();
+    } else if (el.open) el.close();
+    return undefined;
+  }, [open]);
+
+  return (
+    <dialog
+      ref={ref}
+      className="ann-type-dialog"
+      aria-labelledby="ann-override-title"
+      onClose={onCancel}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onCancel();
+      }}
+    >
+      <div className="ann-type-panel" onClick={(e) => e.stopPropagation()}>
+        <h2 id="ann-override-title" className="ann-type-title">
+          Override existing announcement bar?
+        </h2>
+        <p className="ann-type-sub">
+          Only one Header / Announcement bar can be active at a time.{" "}
+          <strong>{existingName}</strong> is currently on. Override it to turn on this bar, or
+          cancel to keep everything as is.
+        </p>
+        <s-stack direction="inline" gap="small">
+          <s-button type="button" variant="secondary" onClick={onCancel}>
+            Cancel
+          </s-button>
+          <s-button type="button" variant="primary" onClick={onOverride}>
+            Override
+          </s-button>
+        </s-stack>
+      </div>
+    </dialog>
+  );
+}
 
 function TypePickerModal({ open, onClose, onPickHeader, onPickBody, headerDisabled, bodyDisabled }) {
   const ref = useRef(null);
@@ -211,19 +315,24 @@ function UnifiedDeleteModal({ open, target, onClose, onConfirm }) {
 }
 
 export default function AnnouncementsPage() {
-  const { mergedRows, headerLoaderData, bodyLoaderData, billingPlan } = useLoaderData();
+  const { mergedRows, headerLoaderData, bodyLoaderData, billingPlan: loaderBillingPlan } =
+    useLoaderData();
+  const { onboarding, billingPlan: outletBillingPlan } = useOutletContext() || {};
+  const billingPlan = loaderBillingPlan ?? outletBillingPlan;
   const canDeleteRecords = Boolean(billingPlan?.isPremium);
   const billingUpgradeHref = useBillingUpgradeHref();
   const actionData = useActionData();
   const location = useLocation();
   const navigate = useNavigate();
+  const navigation = useNavigation();
   const submit = useSubmit();
-  const { onboarding } = useOutletContext() || {};
 
   const [typePickerOpen, setTypePickerOpen] = useState(false);
   const [tablePageSize, setTablePageSize] = useState(10);
   const [tablePage, setTablePage] = useState(1);
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [headerOverride, setHeaderOverride] = useState(null);
+  const toggleBusy = navigation.state === "submitting";
 
   const withShopifyParams = useCallback(
     (path) => {
@@ -249,6 +358,35 @@ export default function AnnouncementsPage() {
     [mergedRows, pageStart, tablePageSize],
   );
   const pageEnd = Math.min(pageStart + paginatedRows.length, totalRecords);
+
+  const urlKind = useMemo(
+    () => new URLSearchParams(location.search).get("kind") || "",
+    [location.search],
+  );
+  const urlEditId = useMemo(
+    () => new URLSearchParams(location.search).get("edit") || "",
+    [location.search],
+  );
+  const editingPlanLocked = useMemo(() => {
+    if (!urlEditId || billingPlan?.isPremium) return false;
+    if (urlKind === "header") {
+      return !isAnnouncementEditableOnPlan(
+        billingPlan?.planId,
+        "header",
+        urlEditId,
+        billingPlan?.planSlots,
+      );
+    }
+    if (urlKind === "body") {
+      return !isAnnouncementEditableOnPlan(
+        billingPlan?.planId,
+        "body",
+        urlEditId,
+        billingPlan?.planSlots,
+      );
+    }
+    return false;
+  }, [urlEditId, urlKind, billingPlan?.planId, billingPlan?.planSlots, billingPlan?.isPremium]);
 
   const announcementLimits = useMemo(
     () => getPlanLimits(billingPlan?.planId),
@@ -282,6 +420,52 @@ export default function AnnouncementsPage() {
       navigate(withShopifyParams("/app/announcements"));
     }
   }, [actionData, navigate, withShopifyParams]);
+
+  useEffect(() => {
+    if (actionData?.needsHeaderOverride) {
+      setHeaderOverride({
+        pendingId: actionData.pendingId,
+        existingName: actionData.existingActiveName || "Another bar",
+      });
+    }
+  }, [actionData?.needsHeaderOverride, actionData?.pendingId, actionData?.existingActiveName]);
+
+  useEffect(() => {
+    if (actionData?.ok && actionData?.intent === "set_active") {
+      setHeaderOverride(null);
+    }
+  }, [actionData?.ok, actionData?.intent]);
+
+  const submitDisplayToggle = useCallback(
+    (row, nextActive, confirmOverride = false) => {
+      const fd = new FormData();
+      fd.set("intent", "set_active");
+      fd.set("active", nextActive ? "1" : "0");
+      if (row.kind === "header") {
+        fd.set("recordKind", "header");
+        fd.set("id", row.id);
+        if (confirmOverride) fd.set("confirmOverride", "true");
+      } else {
+        fd.set("recordKind", "body");
+        fd.set("rowId", row.id);
+      }
+      submit(fd, { method: "post" });
+    },
+    [submit],
+  );
+
+  const confirmHeaderOverride = useCallback(() => {
+    if (!headerOverride?.pendingId) return;
+    const row = mergedRows.find(
+      (r) => r.kind === "header" && r.id === headerOverride.pendingId,
+    );
+    if (!row) {
+      setHeaderOverride(null);
+      return;
+    }
+    submitDisplayToggle(row, true, true);
+    setHeaderOverride(null);
+  }, [headerOverride, mergedRows, submitDisplayToggle]);
 
   const confirmUnifiedDelete = useCallback(() => {
     if (!deleteTarget || !canDeleteRecords) return;
@@ -346,20 +530,104 @@ export default function AnnouncementsPage() {
           font-size: 0.875rem;
           cursor: pointer;
         }
+        .ann-display-toggle {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          cursor: pointer;
+          user-select: none;
+        }
+        .ann-display-toggle.is-disabled {
+          opacity: 0.55;
+          cursor: not-allowed;
+        }
+        .ann-unified-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        .ann-unified-table thead tr { background: #f8fafc; border-bottom: 1px solid #e4e8f0; }
+        .ann-unified-table th {
+          text-align: left;
+          padding: 12px 16px;
+          font-weight: 700;
+          color: #475569;
+          font-size: 11px;
+          letter-spacing: 0.04em;
+          text-transform: uppercase;
+        }
+        .ann-unified-table tbody tr { border-bottom: 1px solid #eef0f4; transition: background 0.12s; }
+        .ann-unified-table tbody tr:hover:not(.sce-plan-locked-row) { background: #f8fafc; }
+        .ann-unified-table td { padding: 14px 16px; vertical-align: middle; color: #0f172a; }
+        .ann-type-label, .ann-name-label { font-weight: 600; }
+        .ann-section-id { font-family: ui-monospace, monospace; font-size: 12px; font-weight: 600; }
+        .ann-actions-cell { text-align: right; white-space: nowrap; }
+        .ann-display-toggle input {
+          position: absolute;
+          width: 1px;
+          height: 1px;
+          padding: 0;
+          margin: -1px;
+          overflow: hidden;
+          clip: rect(0, 0, 0, 0);
+          white-space: nowrap;
+          border: 0;
+        }
+        .ann-display-toggle-track {
+          position: relative;
+          width: 40px;
+          height: 22px;
+          border-radius: 999px;
+          background: #d1d5db;
+          transition: background 0.2s;
+          flex-shrink: 0;
+        }
+        .ann-display-toggle.is-on .ann-display-toggle-track {
+          background: rgb(0, 123, 95);
+        }
+        .ann-display-toggle-thumb {
+          position: absolute;
+          top: 2px;
+          left: 2px;
+          width: 18px;
+          height: 18px;
+          border-radius: 50%;
+          background: #fff;
+          box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+          transition: transform 0.2s;
+        }
+        .ann-display-toggle.is-on .ann-display-toggle-thumb {
+          transform: translateX(18px);
+        }
+        .ann-display-toggle-text {
+          font-size: 12px;
+          font-weight: 600;
+          color: #334155;
+          min-width: 22px;
+        }
       `}</style>
 
-      <AnnouncementHeaderAdmin
-        loaderData={headerLoaderData}
-        routePrefix="/app/announcements"
-        showTable={false}
-        navigateQueryStyle="unified"
-      />
-      <AnnouncementBodyAdmin
-        loaderData={bodyLoaderData}
-        routePrefix="/app/announcements"
-        showTable={false}
-        navigateQueryStyle="unified"
-      />
+      {editingPlanLocked ? (
+        <div className={PLAN_LOCKED_PANEL_CLASS} style={{ margin: "0 0 12px" }}>
+          {PLAN_LOCKED_ITEM_MESSAGE}{" "}
+          <s-link href={withShopifyParams("/app/billing")}>Upgrade to Premium</s-link> to edit
+          this announcement.
+        </div>
+      ) : null}
+
+      <div
+        className={editingPlanLocked ? "sce-plan-locked-editor-body" : undefined}
+        style={editingPlanLocked ? { pointerEvents: "none" } : undefined}
+      >
+        <AnnouncementHeaderAdmin
+          loaderData={headerLoaderData}
+          routePrefix="/app/announcements"
+          showTable={false}
+          navigateQueryStyle="unified"
+        />
+        <AnnouncementBodyAdmin
+          loaderData={bodyLoaderData}
+          routePrefix="/app/announcements"
+          showTable={false}
+          navigateQueryStyle="unified"
+        />
+      </div>
 
       <TypePickerModal
         open={typePickerOpen}
@@ -383,6 +651,13 @@ export default function AnnouncementsPage() {
         onConfirm={confirmUnifiedDelete}
       />
 
+      <HeaderOverrideModal
+        open={Boolean(headerOverride)}
+        existingName={headerOverride?.existingName || ""}
+        onCancel={() => setHeaderOverride(null)}
+        onOverride={confirmHeaderOverride}
+      />
+
       <s-page heading="Announcements">
         {!onboarding?.clientIdConfigured ? (
           <s-banner tone="critical" heading="Missing API Key">
@@ -394,7 +669,9 @@ export default function AnnouncementsPage() {
           <s-banner tone="success" heading="Updated">
             {actionData?.intent === "delete" || actionData?.deleted
               ? "Announcement removed."
-              : "Saved successfully."}
+              : actionData?.intent === "set_active"
+                ? "Storefront display updated."
+                : "Saved successfully."}
           </s-banner>
         ) : null}
 
@@ -409,6 +686,20 @@ export default function AnnouncementsPage() {
             ) : null}
           </s-banner>
         ) : null}
+
+        <AnnouncementThemeSetupBanner
+          embedUrl={
+            onboarding?.announcementBarEmbedEditorUrl ||
+            headerLoaderData?.announcementBarEditorUrl
+          }
+          blockHeaderUrl={
+            onboarding?.announcementBarBlockHeaderUrl ||
+            headerLoaderData?.announcementBarBlockHeaderUrl
+          }
+          clientIdConfigured={
+            onboarding?.clientIdConfigured ?? headerLoaderData?.clientIdConfigured
+          }
+        />
 
         {!billingPlan?.isPremium ? (
           <s-banner tone="info" heading={`${billingPlan.planName} plan`}>
@@ -511,71 +802,114 @@ export default function AnnouncementsPage() {
               <s-text tone="neutral">No announcements yet. Create a header bar or a body block.</s-text>
             </s-box>
           ) : (
-            <s-table variant="auto">
-              <s-table-header-row>
-                <s-table-header listSlot="labeled">Type</s-table-header>
-                <s-table-header listSlot="labeled">Section ID</s-table-header>
-                <s-table-header listSlot="primary">Name</s-table-header>
-                <s-table-header listSlot="labeled">Actions</s-table-header>
-              </s-table-header-row>
-              <s-table-body>
-                {paginatedRows.map((row) => (
-                  <s-table-row key={`${row.kind}-${row.id}`}>
-                    <s-table-cell>
-                      <s-text type="strong">
-                        {row.kind === "header" ? "Header / Announcement bar" : "Body / Announcement Section"}
-                      </s-text>
-                    </s-table-cell>
-                    <s-table-cell>
-                      <s-text fontVariantNumeric="tabular-nums" type="strong">
-                        {row.sectionId}
-                      </s-text>
-                    </s-table-cell>
-                    <s-table-cell>
-                      <s-text type="strong">{row.name}</s-text>
-                    </s-table-cell>
-                    <s-table-cell>
-                      <s-stack direction="inline" gap="small-100">
-                        <s-button
-                          type="button"
-                          variant="tertiary"
-                          icon="edit"
-                          onClick={() => {
-                            const q =
-                              row.kind === "header"
-                                ? `kind=header&edit=${encodeURIComponent(row.id)}`
-                                : `kind=body&edit=${encodeURIComponent(row.id)}`;
-                            navigate(withShopifyParams(`/app/announcements?${q}`));
-                          }}
-                        />
-                        <PlanGatedDeleteTooltip
-                          canDelete={canDeleteRecords}
-                          upgradeHref={billingUpgradeHref}
-                        >
-                          <s-button
-                            type="button"
-                            variant="tertiary"
-                            tone="critical"
-                            icon="delete"
-                            disabled={!canDeleteRecords}
-                            onClick={
-                              canDeleteRecords
-                                ? () =>
-                                    setDeleteTarget({
-                                      kind: row.kind,
-                                      id: row.id,
-                                      name: row.name,
-                                    })
-                                : undefined
-                            }
+            <div
+              style={{
+                overflowX: "auto",
+                borderRadius: 14,
+                border: "1px solid #e4e8f0",
+                background: "#fff",
+              }}
+            >
+              <table className="ann-unified-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Type</th>
+                    <th scope="col">Section ID</th>
+                    <th scope="col">Name</th>
+                    <th scope="col">Display</th>
+                    <th scope="col" className="ann-actions-cell">
+                      Actions
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {paginatedRows.map((row) => {
+                    const rowPlanLocked = !isAnnouncementEditableOnPlan(
+                      billingPlan?.planId,
+                      row.kind,
+                      row.id,
+                      billingPlan?.planSlots,
+                    );
+                    const cellProps = planLockedTableCellProps(rowPlanLocked);
+                    const typeLabel =
+                      row.kind === "header"
+                        ? "Header / Announcement bar"
+                        : "Section / Announcement Bar ";
+                    return (
+                      <tr
+                        key={`${row.kind}-${row.id}`}
+                        className={planLockedRowClassName(rowPlanLocked)}
+                        title={rowPlanLocked ? PLAN_LOCKED_ITEM_MESSAGE : undefined}
+                        aria-disabled={rowPlanLocked || undefined}
+                      >
+                        <td {...cellProps}>
+                          <span className="ann-type-label">{typeLabel}</span>
+                        </td>
+                        <td {...cellProps}>
+                          <span className="ann-section-id">
+                            {row.kind === "header" ? "—" : row.sectionId}
+                          </span>
+                        </td>
+                        <td {...cellProps}>
+                          <span className="ann-name-label">{row.name}</span>
+                        </td>
+                        <td {...cellProps}>
+                          <AnnouncementDisplayToggle
+                            active={Boolean(row.active)}
+                            disabled={toggleBusy || rowPlanLocked}
+                            onChange={(next) => {
+                              if (rowPlanLocked && next) return;
+                              if (row.kind === "header" && next && !row.active) {
+                                submitDisplayToggle(row, true, false);
+                                return;
+                              }
+                              submitDisplayToggle(row, next, false);
+                            }}
                           />
-                        </PlanGatedDeleteTooltip>
-                      </s-stack>
-                    </s-table-cell>
-                  </s-table-row>
-                ))}
-              </s-table-body>
-            </s-table>
+                        </td>
+                        <td
+                          {...cellProps}
+                          className={
+                            rowPlanLocked
+                              ? `ann-actions-cell ${PLAN_LOCKED_CELL_CLASS}`
+                              : "ann-actions-cell"
+                          }
+                        >
+                          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                            <s-button
+                              type="button"
+                              variant="tertiary"
+                              icon="edit"
+                              disabled={rowPlanLocked}
+                              title={rowPlanLocked ? PLAN_LOCKED_ITEM_MESSAGE : undefined}
+                              onClick={() => {
+                                if (rowPlanLocked) return;
+                                const q =
+                                  row.kind === "header"
+                                    ? `kind=header&edit=${encodeURIComponent(row.id)}`
+                                    : `kind=body&edit=${encodeURIComponent(row.id)}`;
+                                navigate(withShopifyParams(`/app/announcements?${q}`));
+                              }}
+                            />
+                            <PlanGatedDeleteButton
+                              canDelete={canDeleteRecords}
+                              upgradeHref={billingUpgradeHref}
+                              onClick={() =>
+                                setDeleteTarget({
+                                  kind: row.kind,
+                                  id: row.id,
+                                  name: row.name,
+                                })
+                              }
+                            />
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           )}
 
           {mergedRows.length > 0 ? (

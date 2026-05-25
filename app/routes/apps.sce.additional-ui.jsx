@@ -28,6 +28,7 @@ export const loader = async ({ request }) => {
         updatedAt: true,
         bodyJson: true,
         templateJson: true,
+        active: true,
       },
     });
   } catch (error) {
@@ -36,8 +37,26 @@ export const loader = async ({ request }) => {
     rows = await prisma.announcementBody.findMany({
       where: shopWhere,
       orderBy: { updatedAt: "desc" },
-      select: { id: true, sectionId: true, updatedAt: true, bodyJson: true },
+      select: {
+        id: true,
+        sectionId: true,
+        updatedAt: true,
+        bodyJson: true,
+        active: true,
+      },
     });
+  }
+
+  if (!sectionId) {
+    return Response.json(
+      {
+        ok: false,
+        error: "missing_section_id",
+        active: false,
+        hint: "Set the Section ID in the theme block to match an announcement section in the app.",
+      },
+      { status: 400 },
+    );
   }
 
   const matchedRow = rows.find((entry) => {
@@ -48,7 +67,31 @@ export const loader = async ({ request }) => {
     );
     return normalizedSectionId === sectionId;
   });
-  const row = matchedRow || rows[0] || null;
+  const row = matchedRow || null;
+
+  if (!row) {
+    return Response.json(
+      {
+        ok: false,
+        error: "not_found",
+        active: false,
+        hint: "No announcement section matches this Section ID for this shop.",
+      },
+      { status: 404 },
+    );
+  }
+
+  if (!row.active) {
+    return Response.json(
+      {
+        ok: false,
+        error: "section_inactive",
+        active: false,
+        hint: "This announcement section is turned off in the app. Turn Display on to show it on the storefront.",
+      },
+      { status: 404 },
+    );
+  }
   const parsed = row ? parseAdditionalConfig(row.bodyJson) : defaultAdditionalConfig();
   const config = {
     ...parsed,
@@ -68,6 +111,7 @@ export const loader = async ({ request }) => {
 
   return Response.json({
     ok: true,
+    active: true,
     id: row?.id ?? "default",
     version: `${row?.id || "default"}:${row?.updatedAt?.toISOString?.() || "base"}`,
     updatedAt: row?.updatedAt?.toISOString?.() || null,

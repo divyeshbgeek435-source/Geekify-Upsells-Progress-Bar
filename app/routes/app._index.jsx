@@ -249,7 +249,7 @@ function groupTiersByDiscount(tiers, discounts = []) {
 
 export const loader = async ({ request }) => {
   const { admin, session, billing } = await authenticate.admin(request);
-  const billingPlan = await loadShopBillingContext(billing);
+  const billingPlan = await loadShopBillingContext(billing, session.shop);
 
   const response = await admin.graphql(LIST_DISCOUNTS_FOR_USAGE, {
     variables: { first: 50 },
@@ -952,8 +952,8 @@ function SetupGuideSection({ onboarding, setupDetection, withShopifyParams }) {
                     <p className="setup-guide-hint">
                       The app cannot see your theme editor. After the embed is turned <strong>on</strong> and you have
                       clicked <strong>Save</strong> in the theme editor, click <strong>Confirm app embed is saved</strong>{" "}
-                      above - this step will show as completed. For popups on product or cart pages, also enable{" "}
-                      <strong>Popup design (site-wide)</strong> under App embeds and paste your Popup design ID there.
+                      above - this step will show as completed.                       Turn on <strong>Geekify storefront</strong> under App embeds (one toggle for announcements, tier
+                      progress, and popups). Use Display and targeting in each app screen to control what shows.
                     </p>
                     <p className="setup-guide-hint">
                       After deploy, open{" "}
@@ -1012,8 +1012,9 @@ function SetupGuideSection({ onboarding, setupDetection, withShopifyParams }) {
                 </button>
                 {openIndex === 2 ? (
                   <div className="setup-guide-step-body">
-                    Create and customize the popup design. Once created, a unique ID will be generated. Copy the ID and
-                    paste it into the storefront block section to display the popup on the frontend.
+                    Create and customize the popup, set <strong>Target pages</strong>, then turn <strong>Display</strong> on
+                    in the popup list. With <strong>Geekify storefront</strong> enabled under App embeds, visitors see
+                    popups when Display and targeting match—no Design ID in the theme.
                     <div className="setup-guide-step-actions">
                       <button type="button" className="setup-guide-a-primary" onClick={goPopup}>
                         Open Popup designer

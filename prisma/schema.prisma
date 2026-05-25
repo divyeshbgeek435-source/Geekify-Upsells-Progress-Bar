@@ -177,3 +177,12 @@ model PopupSignup {
   @@unique([shop, popupDesignId, email])
   @@index([shop, popupDesignId])
 }
+
+model ShopPlanState {
+  shop                    String   @id
+  lastKnownPlanId         String   @default("free")
+  pendingDowngradeNotice  Boolean  @default(false)
+  updatedAt               DateTime @updatedAt
+
+  @@map("shop_plan_state")
+}

@@ -2506,7 +2506,7 @@ import {
   rejectIfDeleteNotAllowed,
 } from "../lib/app-billing.server.js";
 import {
-  PlanGatedDeleteTooltip,
+  PlanGatedDeleteButton,
   useBillingUpgradeHref,
 } from "../components/plan-gated-delete.jsx";
 
@@ -3883,7 +3883,7 @@ export const loader = async ({ request }) => {
 
 export const action = async ({ request }) => {
   const { session, billing } = await authenticate.admin(request);
-  const billingPlan = await loadShopBillingContext(billing);
+  const billingPlan = await loadShopBillingContext(billing, session.shop);
   const form = await request.formData();
   if (String(form.get("intent") || "") === "delete") {
     const deleteBlock = rejectIfDeleteNotAllowed(billingPlan.planId);
@@ -3892,13 +3892,65 @@ export const action = async ({ request }) => {
   return handleAnnouncementHeaderAdminAction(session.shop, form);
 };
 
+export function AnnouncementThemeSetupBanner({
+  embedUrl,
+  blockHeaderUrl,
+  clientIdConfigured,
+}) {
+  if (!clientIdConfigured) {
+    return (
+      <s-banner tone="critical" heading="Theme setup">
+        Set <code>SHOPIFY_API_KEY</code> in <code>.env</code> so theme editor links work from this app.
+      </s-banner>
+    );
+  }
+  return (
+    <s-banner tone="warning" heading="Add Header / Announcement bar to your theme">
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <p style={{ margin: 0, lineHeight: 1.45 }}>
+          <strong>Site-wide (recommended):</strong> Enable <strong>Geekify storefront</strong> under App
+          embeds — loads the announcement bar, tier progress, and popups. Save the theme after turning it on.
+        </p>
+        <p style={{ margin: 0, lineHeight: 1.45 }}>
+          <strong>Header section:</strong> Add <strong>Announcement bar (Header)</strong> in Theme →
+          Header for an inline bar in the header area.
+        </p>
+        <p style={{ margin: 0, fontSize: "0.8125rem", color: "#64748b" }}>
+          Leave Section ID empty in the theme block — the app uses whichever header announcement has
+          Display turned on here.
+        </p>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+          {embedUrl ? (
+            <s-link href={embedUrl} target="_top">
+              Open app embeds
+            </s-link>
+          ) : null}
+          {blockHeaderUrl ? (
+            <s-link href={blockHeaderUrl} target="_top">
+              Add to theme header
+            </s-link>
+          ) : null}
+        </div>
+      </div>
+    </s-banner>
+  );
+}
+
 export function AnnouncementHeaderAdmin({
   loaderData,
   routePrefix = "/app/announcement-bars",
   showTable = true,
   navigateQueryStyle = "standalone",
 }) {
-  const { shop, bars, editingBar, pendingHeaderCreate } = loaderData;
+  const {
+    shop,
+    bars,
+    editingBar,
+    pendingHeaderCreate,
+    announcementBarEditorUrl,
+    announcementBarBlockHeaderUrl,
+    clientIdConfigured,
+  } = loaderData;
   const { billingPlan } = useOutletContext() || {};
   const canDeleteRecords = Boolean(billingPlan?.isPremium);
   const billingUpgradeHref = useBillingUpgradeHref();
@@ -3920,7 +3972,9 @@ export function AnnouncementHeaderAdmin({
     return resolveSectionHtmlIdFromHeader(editingBar);
   });
 
-  const editKey = editingBar?.id ?? "__new__";
+  const barSyncKey = editingBar
+    ? `${editingBar.id}:${editingBar.updatedAt?.toISOString?.() || ""}`
+    : "__none__";
 
   const [designModalOpen, setDesignModalOpen] = useState(false);
   const [createModalOpen, setCreateModalOpen] = useState(false);
@@ -3932,7 +3986,7 @@ export function AnnouncementHeaderAdmin({
 
   useEffect(() => {
     setDesignModalOpen(false);
-  }, [editKey]);
+  }, [barSyncKey]);
 
   useEffect(() => {
     if (selectedTemplateId !== "simple" && createActiveTab === "links") {
@@ -3998,7 +4052,7 @@ export function AnnouncementHeaderAdmin({
       setCreateActiveTab("messages");
       setSelectedTemplateId("");
       setCreateModalOpen(true);
-    } else {
+    } else if (!pendingHeaderCreate) {
       setName("");
       setBarType("sticky");
       setConfig(defaultConfig());
@@ -4009,41 +4063,34 @@ export function AnnouncementHeaderAdmin({
       setSelectedTemplateId("");
       setCreateModalOpen(false);
     }
-  }, [editKey]);
+  }, [barSyncKey, editingBar, pendingHeaderCreate]);
+
+  const clearHeaderEditRoute = useCallback(() => {
+    const listPath =
+      navigateQueryStyle === "unified" ? routePrefix : routePrefix;
+    navigate(withShopifyParams(listPath), { replace: true });
+  }, [navigate, navigateQueryStyle, routePrefix, withShopifyParams]);
 
   useEffect(() => {
-    if (actionData?.ok && actionData?.createdId) {
+    if (!actionData?.ok) return;
+    if (actionData.createdId || actionData.intent === "update") {
       setCreateModalOpen(false);
       setDesignModalOpen(false);
-      // Return to list without `edit` - otherwise loader sets `editingBar` and the edit modal opens.
-      const listPath =
-        navigateQueryStyle === "unified" ? `${routePrefix}?kind=header` : routePrefix;
-      navigate(withShopifyParams(listPath));
+      clearHeaderEditRoute();
     }
   }, [
     actionData?.createdId,
+    actionData?.intent,
     actionData?.ok,
-    navigate,
-    navigateQueryStyle,
-    routePrefix,
-    withShopifyParams,
+    clearHeaderEditRoute,
   ]);
 
   useEffect(() => {
     if (actionData?.ok && actionData?.deleted && editingBar) {
-      const cleared =
-        navigateQueryStyle === "unified" ? `${routePrefix}?kind=header` : routePrefix;
-      navigate(withShopifyParams(cleared));
+      setCreateModalOpen(false);
+      clearHeaderEditRoute();
     }
-  }, [
-    actionData?.deleted,
-    actionData?.ok,
-    editingBar,
-    navigate,
-    navigateQueryStyle,
-    routePrefix,
-    withShopifyParams,
-  ]);
+  }, [actionData?.deleted, actionData?.ok, clearHeaderEditRoute, editingBar]);
 
   const handleSave = useCallback(
     (e) => {
@@ -4120,6 +4167,15 @@ export function AnnouncementHeaderAdmin({
 
   return (
     <>
+      {showTable ? (
+        <div style={{ marginBottom: 0 }}>
+          <AnnouncementThemeSetupBanner
+            embedUrl={announcementBarEditorUrl}
+            blockHeaderUrl={announcementBarBlockHeaderUrl}
+            clientIdConfigured={clientIdConfigured}
+          />
+        </div>
+      ) : null}
       <style>
         {`
         @keyframes ab-fade-in {
@@ -4280,11 +4336,7 @@ export function AnnouncementHeaderAdmin({
         open={createModalOpen}
         onClose={() => {
           setCreateModalOpen(false);
-          if (editingBar) {
-            const cleared =
-              navigateQueryStyle === "unified" ? `${routePrefix}?kind=header` : routePrefix;
-            navigate(withShopifyParams(cleared));
-          }
+          if (editingBar) clearHeaderEditRoute();
         }}
         onSubmit={handleSave}
         onDelete={() => {
@@ -4386,11 +4438,7 @@ export function AnnouncementHeaderAdmin({
               {paginatedBars.map((b) => (
                 <s-table-row key={b.id}>
                    <s-table-cell>
-                    <s-stack direction="block" gap="small-100">
-                      <s-text fontVariantNumeric="tabular-nums" type="strong">
-                        {resolveSectionHtmlIdFromHeader(b)}
-                      </s-text>
-                    </s-stack>
+                    <s-text tone="neutral">—</s-text>
                   </s-table-cell>
                   <s-table-cell>
                     <s-text type="strong">{b.name}</s-text>
@@ -4431,23 +4479,11 @@ export function AnnouncementHeaderAdmin({
                       >
                         Copy Section ID
                       </s-button> */}
-                      <PlanGatedDeleteTooltip
+                      <PlanGatedDeleteButton
                         canDelete={canDeleteRecords}
                         upgradeHref={billingUpgradeHref}
-                      >
-                        <s-button
-                          type="button"
-                          variant="tertiary"
-                          tone="critical"
-                          icon="delete"
-                          disabled={!canDeleteRecords}
-                          onClick={
-                            canDeleteRecords
-                              ? () => setDeleteTarget({ id: b.id, name: b.name })
-                              : undefined
-                          }
-                        />
-                      </PlanGatedDeleteTooltip>
+                        onClick={() => setDeleteTarget({ id: b.id, name: b.name })}
+                      />
                     </s-stack>
                   </s-table-cell>
                 </s-table-row>

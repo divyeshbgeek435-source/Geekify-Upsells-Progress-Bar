@@ -1422,7 +1422,7 @@ import {
   rejectIfDeleteNotAllowed,
 } from "../lib/app-billing.server.js";
 import {
-  PlanGatedDeleteTooltip,
+  PlanGatedDeleteButton,
   useBillingUpgradeHref,
 } from "../components/plan-gated-delete.jsx";
 import {
@@ -1562,7 +1562,7 @@ export const loader = async ({ request }) => {
 
 export const action = async ({ request }) => {
   const { session, billing } = await authenticate.admin(request);
-  const billingPlan = await loadShopBillingContext(billing);
+  const billingPlan = await loadShopBillingContext(billing, session.shop);
   const form = await request.formData();
   if (String(form.get("intent") || "") === "delete") {
     const deleteBlock = rejectIfDeleteNotAllowed(billingPlan.planId);
@@ -1622,12 +1622,22 @@ export function AnnouncementBodyAdmin({
     navigation.state === "submitting" &&
     navigation.formData?.get("intent") === "delete";
 
-  // Close modal after a successful save action
+  const urlEditHydratedRef = useRef("");
+
+  const closeEditor = useCallback(() => {
+    setIsEditorOpen(false);
+    urlEditHydratedRef.current = "";
+    if (navigateQueryStyle === "unified") {
+      navigate(withShopifyParams(routePrefix), { replace: true });
+    }
+  }, [navigate, navigateQueryStyle, routePrefix, withShopifyParams]);
+
+  // Close modal and return to list after a successful save
   useEffect(() => {
     if (actionData?.ok && actionData?.intent === "save") {
-      setIsEditorOpen(false);
+      closeEditor();
     }
-  }, [actionData]);
+  }, [actionData, closeEditor]);
 
   // ── Table data enrichment ──────────────────────────────────────────────────
 
@@ -1845,17 +1855,16 @@ export function AnnouncementBodyAdmin({
       return { ...prev, messages: next.length ? next : [""] };
     });
 
-  const lastBodyUrlOpenRef = useRef("");
   useEffect(() => {
-    if (!bodyEditId) lastBodyUrlOpenRef.current = "";
-  }, [bodyEditId]);
-
-  useEffect(() => {
-    if (navigateQueryStyle !== "unified" || !bodyEditId || !blocks.length) return;
-    if (lastBodyUrlOpenRef.current === bodyEditId) return;
+    if (!bodyEditId) {
+      urlEditHydratedRef.current = "";
+      return;
+    }
+    if (navigateQueryStyle !== "unified" || !blocks.length) return;
+    if (urlEditHydratedRef.current === bodyEditId) return;
     const row = blocks.find((b) => b.rowId === bodyEditId);
     if (!row) return;
-    lastBodyUrlOpenRef.current = bodyEditId;
+    urlEditHydratedRef.current = bodyEditId;
     setEditingRowId(row.rowId);
     setEditor(buildEditorState(row.config));
     setEditorStep("tabs");
@@ -2031,21 +2040,12 @@ export function AnnouncementBodyAdmin({
                           >
 
                           </s-button>
-                          <PlanGatedDeleteTooltip
+                          <PlanGatedDeleteButton
                             canDelete={canDeleteRecords}
                             upgradeHref={billingUpgradeHref}
-                          >
-                            <s-button
-                              type="button"
-                              variant="secondary"
-                              tone="critical"
-                              icon="delete"
-                              disabled={!canDeleteRecords || isDeleting}
-                              onClick={
-                                canDeleteRecords ? () => requestDelete(row) : undefined
-                              }
-                            />
-                          </PlanGatedDeleteTooltip>
+                            disabled={isDeleting}
+                            onClick={() => requestDelete(row)}
+                          />
                         </div>
                       </td>
                     </tr>
@@ -2144,7 +2144,7 @@ export function AnnouncementBodyAdmin({
           className="sce-modal-backdrop"
           onMouseDown={(e) => {
             // Close on backdrop click, not on modal click
-            if (e.target === e.currentTarget) setIsEditorOpen(false);
+            if (e.target === e.currentTarget) closeEditor();
           }}
         >
           <div className="sce-modal" role="dialog" aria-modal="true">
@@ -2182,7 +2182,7 @@ export function AnnouncementBodyAdmin({
                   // icon="delete"
                   tone="critical"
                   aria-label="Close editor"
-                  onClick={() => setIsEditorOpen(false)}
+                  onClick={closeEditor}
                 >
                   ×
                 </s-button>
@@ -2494,7 +2494,7 @@ export function AnnouncementBodyAdmin({
                     <button
                       type="button"
                       className="sce-btn sce-btn-secondary"
-                      onClick={() => setIsEditorOpen(false)}
+                      onClick={closeEditor}
                     >
                       Cancel
                     </button>

@@ -3724,9 +3724,17 @@
 
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Form, useActionData, useFetcher, useLoaderData, useRevalidator, useSearchParams } from "react-router";
 import {
-  PlanGatedDeleteTooltip,
+  Form,
+  useActionData,
+  useFetcher,
+  useLoaderData,
+  useOutletContext,
+  useRevalidator,
+  useSearchParams,
+} from "react-router";
+import {
+  PlanGatedDeleteButton,
   useBillingUpgradeHref,
 } from "../components/plan-gated-delete.jsx";
 import {
@@ -3753,8 +3761,23 @@ import {
   rejectIfDeleteNotAllowed,
   rejectIfPopupLimitReached,
 } from "../lib/app-billing.server.js";
+import { rejectIfPlanItemLocked } from "../lib/plan-limit-enforcement.server.js";
 import { getPlanLimits } from "../lib/app-plans.shared.js";
+import {
+  isPopupEditableOnPlan,
+  PLAN_LOCKED_ITEM_MESSAGE,
+} from "../lib/plan-limit-access.shared.js";
+import {
+  planLockedRowClassName,
+  PLAN_LOCKED_PANEL_CLASS,
+} from "../components/plan-locked-visual.jsx";
 import prisma from "../db.server";
+import {
+  POPUP_ACTIVE_TARGET_CONFLICT_MESSAGE,
+  getExactPageUrl,
+  normalizePopupPageTarget,
+} from "../lib/popup-page-target.shared.js";
+import { findOtherActivePopupSameTarget } from "../lib/popup-active-conflict.server.js";
 import { buildPopupTemplate } from "../lib/popup-design-template.js";
 
 const POPUP_BAR_TYPE = "popup_design";
@@ -3806,48 +3829,60 @@ const EDITOR_TABS = [
   { id: "colors",    label: "Colors",    icon: "color" },
 ];
 
+/** ON/OFF switch for storefront display (same `set_active` behavior as before). */
+function PopupDisplayToggle({ active, onChange, disabled, showLabel = true }) {
+  return (
+    <label
+      className={`popup-display-toggle${active ? " is-on" : ""}${disabled ? " is-disabled" : ""}`}
+      title={active ? "Display on storefront" : "Hidden on storefront"}
+    >
+      <input
+        type="checkbox"
+        checked={active}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+        aria-label={active ? "Display on storefront: On" : "Display on storefront: Off"}
+      />
+      <span className="popup-display-toggle-track" aria-hidden="true">
+        <span className="popup-display-toggle-thumb" />
+      </span>
+      {showLabel ? (
+        <span className="popup-display-toggle-text">{active ? "On" : "Off"}</span>
+      ) : null}
+    </label>
+  );
+}
+
 function popupLimitReachedMessage(maxPopups) {
   if (maxPopups == null) return "";
   return `Your Free plan allows up to ${maxPopups} popup design${maxPopups === 1 ? "" : "s"}. Upgrade to Premium for unlimited popups.`;
 }
 
-function getStorefrontTargetingExplainer(pageTarget, customPathContains) {
-  const c = String(customPathContains || "").trim();
+function getStorefrontTargetingExplainer(pageTarget, exactPageUrl) {
+  const exact = String(exactPageUrl || "").trim();
   const bullets = [];
-  let needsSiteWideEmbed = false;
   switch (pageTarget) {
     case "all":
-      bullets.push("Opens on any page, as long as the theme loads the popup script (section block and/or site-wide app embed).");
-      bullets.push("Example paths: /, /products/…, /collections/…, /cart");
+      bullets.push("Automatically shows on every page (homepage, products, collections, cart, etc.) when Display is on.");
+      bullets.push("Enable the site-wide app embed once in your theme (see Theme setup below). You do not add this block to each template manually.");
       break;
     case "home":
-      bullets.push("Opens only on the homepage path: /, or a single market prefix like /en or /en-us, or /pages/home.");
-      bullets.push("Does not open on /products/… or other inner pages.");
+      bullets.push("Automatically shows on the Shopify homepage (page type index) or when the URL path is /.");
+      bullets.push("Hidden on product, collection, cart, and all other pages — no extra theme blocks needed on those templates.");
+      bullets.push("Still enable the site-wide app embed once; the app hides the popup outside the homepage.");
       break;
-    case "product":
-      needsSiteWideEmbed = true;
-      bullets.push("Opens when the URL path includes a product segment (standard Shopify).");
-      bullets.push("Example: /products/gift-card or /en/products/gift-card");
-      break;
-    case "collection":
-      needsSiteWideEmbed = true;
-      bullets.push("Opens when the path includes a collection segment, e.g. /collections/summer-sale.");
-      break;
-    case "cart":
-      needsSiteWideEmbed = true;
-      bullets.push("Opens on the cart page path, e.g. /cart or /en/cart.");
-      break;
-    case "custom":
-      needsSiteWideEmbed = true;
+    case "exact":
       bullets.push(
-        c
-          ? `Opens only when the path contains "${c}" (case-insensitive).`
-          : "Set \"URL must contain\" below - otherwise this mode will not open the popup."
-      );      break;
+        exact
+          ? `Automatically shows only when the path is exactly ${exact}.`
+          : "Enter the path below (e.g. /products/gift-card). The popup will not show until a path is saved.",
+      );
+      bullets.push("Enable the site-wide app embed once; matching is done from the current page URL.");
+      break;
     default:
-      bullets.push("Opens according to the selected page targeting.");
+      bullets.push("Choose where this popup may appear on your storefront.");
   }
-  return { bullets, needsSiteWideEmbed };
+  return { bullets };
 }
 
 function toDatetimeLocalValue(iso) {
@@ -3865,17 +3900,24 @@ function fromDatetimeLocalValue(local) {
 
 export const loader = async ({ request }) => {
   const { session, billing } = await authenticate.admin(request);
-  const billingPlan = await loadShopBillingContext(billing);
   const shop = session.shop;
+  const billingPlan = await loadShopBillingContext(billing, shop);
   const rows = await prisma.popupDesign.findMany({
     where: { shop },
-    orderBy: { updatedAt: "desc" },
-    select: { id: true, name: true, popupDesignId: true, configJson: true, templateJson: true, updatedAt: true },
+    orderBy: { createdAt: "asc" },
+    select: { id: true, name: true, popupDesignId: true, configJson: true, templateJson: true, updatedAt: true, createdAt: true, active: true },
   });
   const popups = rows.map((row) => {
     const raw = parsePopupDesignConfig(row.configJson);
     const config = { ...raw, popupDesignId: row.popupDesignId || resolvePopupDesignId(raw, row.id) };
-    return { id: row.id, name: row.name, savedAt: row.updatedAt.toISOString(), config, templateJson: row.templateJson ?? "{}" };
+    return {
+      id: row.id,
+      name: row.name,
+      savedAt: row.updatedAt.toISOString(),
+      active: Boolean(row.active),
+      config,
+      templateJson: row.templateJson ?? "{}",
+    };
   });
   return { popups, billingPlan };
 };
@@ -3896,7 +3938,7 @@ function buildConfigPayload(form) {
     repeatFrequencyMinutes: Number(form.get("repeatFrequencyMinutes") || 60),
     maxImpressions: Number(form.get("maxImpressions") || 0),
     pageTarget: String(form.get("pageTarget") || "all"),
-    customPathContains: String(form.get("customPathContains") || ""),
+    exactPageUrl: String(form.get("exactPageUrl") || form.get("customPathContains") || ""),
     leftImageUrl: String(form.get("leftImageUrl") || ""),
     leftImageAlt: String(form.get("leftImageAlt") || ""),
     copyCouponButtonText: String(form.get("copyCouponButtonText") || ""),
@@ -3944,10 +3986,26 @@ function buildConfigPayload(form) {
 
 export const action = async ({ request }) => {
   const { session, billing } = await authenticate.admin(request);
-  const billingPlan = await loadShopBillingContext(billing);
   const shop = session.shop;
+  const billingPlan = await loadShopBillingContext(billing, shop);
   const form = await request.formData();
   const intent = String(form.get("intent") || "");
+  const planSlots = billingPlan.planSlots;
+  const popupRowId = String(form.get("rowId") || "").trim();
+
+  if (intent === "save" || intent === "duplicate") {
+    const lockErr = rejectIfPlanItemLocked(billingPlan.planId, planSlots, {
+      popupId: popupRowId,
+    });
+    if (lockErr) return lockErr;
+  }
+
+  if (intent === "set_active" && String(form.get("active") || "") === "1") {
+    const lockErr = rejectIfPlanItemLocked(billingPlan.planId, planSlots, {
+      popupId: popupRowId,
+    });
+    if (lockErr) return lockErr;
+  }
 
   if (intent === "create") {
     const limitErr = await rejectIfPopupLimitReached(shop, billingPlan.planId);
@@ -4010,19 +4068,152 @@ export const action = async ({ request }) => {
     return { ok: true, intent: "duplicate", rowId: row.id, savedAt: row.updatedAt.toISOString() };
   }
 
+  if (intent === "sync_targeting") {
+    const rowId = String(form.get("rowId") || "").trim();
+    const row = await prisma.popupDesign.findFirst({
+      where: { id: rowId, shop },
+      select: { id: true, active: true, name: true, popupDesignId: true, configJson: true, templateJson: true },
+    });
+    if (!row) return { ok: false, error: "Popup not found." };
+    let parsedCfg = parsePopupDesignConfig(row.configJson);
+    const nextTarget = normalizePopupPageTarget(String(form.get("pageTarget") || parsedCfg.pageTarget));
+    const exactRaw = String(form.get("exactPageUrl") || form.get("customPathContains") || "").trim();
+    parsedCfg = parsePopupDesignConfig(
+      JSON.stringify({
+        ...parsedCfg,
+        pageTarget: nextTarget,
+        exactPageUrl: nextTarget === "exact" && exactRaw ? exactRaw : "",
+        customPathContains: "",
+      }),
+    );
+    if (parsedCfg.pageTarget === "exact" && !parsedCfg.exactPageUrl) {
+      return { ok: false, error: "Enter an exact URL path for Exact URL targeting." };
+    }
+    if (row.active) {
+      const conflictId = await findOtherActivePopupSameTarget(prisma, shop, row.id, parsedCfg);
+      if (conflictId) return { ok: false, error: POPUP_ACTIVE_TARGET_CONFLICT_MESSAGE };
+    }
+    const designId =
+      String(row.popupDesignId || parsedCfg.popupDesignId || "").trim() ||
+      resolvePopupDesignId(parsedCfg, row.id);
+    const configJson = JSON.stringify(parsedCfg);
+    const templatePayload = buildPopupTemplate({
+      name: row.name || "Popup",
+      popupDesignId: designId,
+      configJson,
+      templateJson: row.templateJson ?? "{}",
+    });
+    const updated = await prisma.popupDesign.update({
+      where: { id: row.id },
+      data: { configJson, templateJson: JSON.stringify(templatePayload) },
+      select: { updatedAt: true },
+    });
+    return {
+      ok: true,
+      intent: "sync_targeting",
+      rowId: row.id,
+      savedAt: updated.updatedAt.toISOString(),
+    };
+  }
+
+  if (intent === "set_active") {
+    const rowId = String(form.get("rowId") || "").trim();
+    const wantActive = String(form.get("active") || "") === "1";
+    const row = await prisma.popupDesign.findFirst({
+      where: { id: rowId, shop },
+      select: { id: true, name: true, popupDesignId: true, configJson: true, templateJson: true },
+    });
+    if (!row) return { ok: false, error: "Popup not found." };
+    const formTargetAlways = String(form.get("pageTarget") || "").trim();
+    const formExactAlways = String(form.get("exactPageUrl") || form.get("customPathContains") || "").trim();
+    if (!wantActive) {
+      const updated = await prisma.popupDesign.update({
+        where: { id: row.id },
+        data: { active: false },
+        select: { updatedAt: true },
+      });
+      return {
+        ok: true,
+        intent: "set_active",
+        rowId: row.id,
+        active: false,
+        savedAt: updated.updatedAt.toISOString(),
+      };
+    }
+    let parsedCfg = parsePopupDesignConfig(row.configJson);
+    if (formTargetAlways) {
+      const nextTarget = normalizePopupPageTarget(formTargetAlways);
+      parsedCfg = parsePopupDesignConfig(
+        JSON.stringify({
+          ...parsedCfg,
+          pageTarget: nextTarget,
+          exactPageUrl: nextTarget === "exact" ? formExactAlways || parsedCfg.exactPageUrl || "" : "",
+          customPathContains: "",
+        }),
+      );
+    }
+    if (parsedCfg.pageTarget === "exact" && !parsedCfg.exactPageUrl) {
+      return { ok: false, error: "Enter an exact URL path before turning Display on." };
+    }
+    const conflictId = await findOtherActivePopupSameTarget(prisma, shop, row.id, parsedCfg);
+    if (conflictId) return { ok: false, error: POPUP_ACTIVE_TARGET_CONFLICT_MESSAGE };
+    const designId =
+      String(row.popupDesignId || parsedCfg.popupDesignId || "").trim() ||
+      resolvePopupDesignId(parsedCfg, row.id);
+    const configJson = JSON.stringify(parsedCfg);
+    const templatePayload = buildPopupTemplate({
+      name: row.name || "Popup",
+      popupDesignId: designId,
+      configJson,
+      templateJson: row.templateJson ?? "{}",
+    });
+    const updated = await prisma.popupDesign.update({
+      where: { id: row.id },
+      data: {
+        active: true,
+        configJson,
+        templateJson: JSON.stringify(templatePayload),
+      },
+      select: { updatedAt: true },
+    });
+    return {
+      ok: true,
+      intent: "set_active",
+      rowId: row.id,
+      active: true,
+      savedAt: updated.updatedAt.toISOString(),
+    };
+  }
+
   if (intent !== "save") return { ok: false, error: "Unknown action." };
   const rowId = String(form.get("rowId") || "").trim();
   if (!rowId) return { ok: false, error: "Select a popup to save." };
-  const owned = await prisma.popupDesign.findFirst({ where: { id: rowId, shop }, select: { id: true, templateJson: true, popupDesignId: true } });
+  const owned = await prisma.popupDesign.findFirst({
+    where: { id: rowId, shop },
+    select: { id: true, templateJson: true, popupDesignId: true, active: true, configJson: true },
+  });
   if (!owned) return { ok: false, error: "Popup not found." };
   const config = buildConfigPayload(form);
+  if (config.pageTarget === "exact" && !config.exactPageUrl) {
+    return { ok: false, error: "Enter an exact URL path for Exact URL targeting." };
+  }
   const popupName = String(form.get("popupName") || "").trim() || "Popup";
   const configJson = JSON.stringify(config);
   const designId = String(config.popupDesignId || owned.popupDesignId || "").trim() || generatePopupDesignId();
   const templatePayload = buildPopupTemplate({ name: popupName, popupDesignId: designId, configJson, templateJson: owned.templateJson ?? "{}" });
+  if (owned.active) {
+    const conflictId = await findOtherActivePopupSameTarget(prisma, shop, owned.id, config);
+    if (conflictId) return { ok: false, error: POPUP_ACTIVE_TARGET_CONFLICT_MESSAGE };
+  }
   const updated = await prisma.popupDesign.update({
     where: { id: owned.id },
-    data: { name: popupName, popupDesignId: designId, configJson, templateJson: JSON.stringify(templatePayload), active: false },
+    data: {
+      name: popupName,
+      popupDesignId: designId,
+      configJson,
+      templateJson: JSON.stringify(templatePayload),
+      active: owned.active,
+    },
     select: { id: true, updatedAt: true },
   });
   return { ok: true, intent: "save", rowId: updated.id, savedAt: updated.updatedAt.toISOString() };
@@ -4162,7 +4353,7 @@ function hydrateFromConfig(c) {
     repeatFrequencyMinutes: cfg.repeatFrequencyMinutes ?? 60,
     maxImpressions: cfg.maxImpressions ?? 0,
     pageTarget: cfg.pageTarget || "all",
-    customPathContains: cfg.customPathContains || "",
+    exactPageUrl: cfg.exactPageUrl || cfg.customPathContains || "",
     leftPanelBg: cfg.leftPanelBg,
     rightPanelBg: cfg.rightPanelBg,
     accentGold: cfg.accentGold,
@@ -4210,7 +4401,10 @@ function hydrateFromConfig(c) {
 
 // ─── Main component ───────────────────────────────────────────────────────────
 export default function PopupDesignPage() {
-  const { popups, billingPlan } = useLoaderData();
+  const { popups, billingPlan: loaderBillingPlan } = useLoaderData();
+  const { billingPlan: outletBillingPlan, onboarding } = useOutletContext() || {};
+  const billingPlan = loaderBillingPlan ?? outletBillingPlan;
+  const popupEmbedEditorUrl = onboarding?.popupDesignEmbedEditorUrl || onboarding?.legacyPopupDesignEmbedUrl || null;
   const canDeleteRecords = Boolean(billingPlan?.isPremium);
   const billingUpgradeHref = useBillingUpgradeHref();
   const actionData = useActionData();
@@ -4242,7 +4436,7 @@ export default function PopupDesignPage() {
   const [repeatFrequencyMinutes, setRepeatFrequencyMinutes] = useState(h0.repeatFrequencyMinutes);
   const [maxImpressions, setMaxImpressions] = useState(h0.maxImpressions);
   const [pageTarget, setPageTarget] = useState(h0.pageTarget);
-  const [customPathContains, setCustomPathContains] = useState(h0.customPathContains);
+  const [exactPageUrl, setExactPageUrl] = useState(h0.exactPageUrl);
   const [leftPanelBg, setLeftPanelBg] = useState(h0.leftPanelBg);
   const [rightPanelBg, setRightPanelBg] = useState(h0.rightPanelBg);
   const [accentGold, setAccentGold] = useState(h0.accentGold);
@@ -4288,7 +4482,6 @@ export default function PopupDesignPage() {
 
   // ── UI state ─────────────────────────────────────────────────────────────────
   const [activePreset, setActivePreset] = useState(null);
-  const [copied, setCopied] = useState(false);
   const [previewCouponCopied, setPreviewCouponCopied] = useState(false);
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
   const [configModal, setConfigModal] = useState(null);
@@ -4303,6 +4496,14 @@ export default function PopupDesignPage() {
   const atPopupLimit =
     popupMax != null && totalPopupRecords >= popupMax;
   const popupLimitMessage = popupLimitReachedMessage(popupMax);
+  const isPopupPlanLocked = useCallback(
+    (popupId) =>
+      !isPopupEditableOnPlan(billingPlan?.planId, popupId, billingPlan?.planSlots),
+    [billingPlan?.planId, billingPlan?.planSlots],
+  );
+  const selectedPopupPlanLocked = selectedPopupId
+    ? isPopupPlanLocked(selectedPopupId)
+    : false;
   const totalTablePages = Math.max(1, Math.ceil(totalPopupRecords / tablePageSize));
   const currentTablePage = Math.min(tablePage, totalTablePages);
   const tableStart = (currentTablePage - 1) * tablePageSize;
@@ -4312,12 +4513,69 @@ export default function PopupDesignPage() {
   );
   const tableEnd = Math.min(tableStart + paginatedPopups.length, totalPopupRecords);
 
-  const targetingExplainer = useMemo(() => getStorefrontTargetingExplainer(pageTarget, customPathContains), [pageTarget, customPathContains]);
+  const targetingExplainer = useMemo(() => getStorefrontTargetingExplainer(pageTarget, exactPageUrl), [pageTarget, exactPageUrl]);
+  const selectedPopupRecord = useMemo(
+    () => popups.find((p) => p.id === selectedPopupId) ?? null,
+    [popups, selectedPopupId],
+  );
+  const submitStorefrontDisplay = useCallback(
+    (rowId, active) => {
+      if (!rowId) return;
+      const rec = popups.find((p) => p.id === rowId);
+      const targetForRow =
+        rec?.id === selectedPopupId ? pageTarget : String(rec?.config?.pageTarget || "all");
+      const exactForRow =
+        rec?.id === selectedPopupId
+          ? exactPageUrl
+          : String(rec?.config?.exactPageUrl || rec?.config?.customPathContains || "");
+      const fd = new FormData();
+      fd.set("intent", "set_active");
+      fd.set("rowId", rowId);
+      fd.set("active", active ? "1" : "0");
+      fd.set("pageTarget", targetForRow);
+      fd.set("exactPageUrl", exactForRow);
+      fetcher.submit(fd, { method: "post" });
+    },
+    [fetcher, pageTarget, exactPageUrl, popups, selectedPopupId],
+  );
   const activeTemplateForKeys = configModal?.mode === "create" ? configModal.templateId : designTemplateId;
   const editorKeyList = useMemo(() => getEditorKeysForTemplateId(activeTemplateForKeys), [activeTemplateForKeys]);
   const showEditorKey = useCallback((...keys) => { if (!editorKeyList) return true; return keys.some((k) => editorKeyList.includes(k)); }, [editorKeyList]);
 
   useEffect(() => { if (selectedPopupId && !popups.some((p) => p.id === selectedPopupId)) { setSelectedPopupId(null); setSearchParams({}); } }, [popups, selectedPopupId, setSearchParams]);
+
+  const targetingSyncRef = useRef("");
+  useEffect(() => {
+    if (!selectedPopupId || !selectedPopupRecord || fetcher.state !== "idle") return;
+    const savedTarget = normalizePopupPageTarget(selectedPopupRecord.config?.pageTarget);
+    const savedExact = getExactPageUrl(selectedPopupRecord.config || {});
+    const nextTarget = normalizePopupPageTarget(pageTarget);
+    const nextExact = getExactPageUrl({ pageTarget: nextTarget, exactPageUrl });
+    const sig = `${nextTarget}|${nextExact}`;
+    if (savedTarget === nextTarget && savedExact === nextExact) {
+      targetingSyncRef.current = sig;
+      return;
+    }
+    if (targetingSyncRef.current === sig) return;
+    if (nextTarget === "exact" && !nextExact) return;
+    const t = setTimeout(() => {
+      targetingSyncRef.current = sig;
+      const fd = new FormData();
+      fd.set("intent", "sync_targeting");
+      fd.set("rowId", selectedPopupId);
+      fd.set("pageTarget", nextTarget);
+      fd.set("exactPageUrl", nextExact);
+      fetcher.submit(fd, { method: "post" });
+    }, 700);
+    return () => clearTimeout(t);
+  }, [
+    pageTarget,
+    exactPageUrl,
+    selectedPopupId,
+    selectedPopupRecord?.config,
+    fetcher.state,
+    fetcher,
+  ]);
   useEffect(() => {
     if (tablePage > totalTablePages) setTablePage(totalTablePages);
   }, [tablePage, totalTablePages]);
@@ -4339,7 +4597,7 @@ export default function PopupDesignPage() {
     setCtaText(h.ctaText); setCtaHref(h.ctaHref); setCountdownEndAt(h.countdownEndAt);
     setCountdownLocal(h.countdownLocal); setShowDelayMs(h.showDelayMs); setDisplayTrigger(h.displayTrigger);
     setShowMode(h.showMode); setRepeatFrequencyMinutes(h.repeatFrequencyMinutes); setMaxImpressions(h.maxImpressions);
-    setPageTarget(h.pageTarget); setCustomPathContains(h.customPathContains); setLeftPanelBg(h.leftPanelBg);
+    setPageTarget(h.pageTarget); setExactPageUrl(h.exactPageUrl); setLeftPanelBg(h.leftPanelBg);
     setRightPanelBg(h.rightPanelBg); setAccentGold(h.accentGold); setHeadlineColor(h.headlineColor);
     setSubheadlineColor(h.subheadlineColor); setButtonBg(h.buttonBg); setButtonText(h.buttonText);
     setOverlayBg(h.overlayBg); setLeftImageUrl(h.leftImageUrl); setLeftImageAlt(h.leftImageAlt);
@@ -4359,8 +4617,20 @@ export default function PopupDesignPage() {
     setCloseButtonPosition(h.closeButtonPosition);
   };
 
+  const closeConfigModal = useCallback(() => {
+    hydrateVersion.current = "";
+    setConfigModal(null);
+  }, []);
+
+  const hydrateEditorFromPopup = useCallback((popup) => {
+    if (!popup) return;
+    applyEditorRef.current(hydrateFromConfig(popup.config), popup.name || "Popup");
+  }, []);
+
   useEffect(() => {
-    if (configModal?.mode === "create" && configModal.templateId) {
+    if (!configModal) return;
+
+    if (configModal.mode === "create" && configModal.templateId) {
       const t = POPUP_READY_TEMPLATES.find((x) => x.id === configModal.templateId);
       if (!t) return;
       const v = `create:${configModal.templateId}`;
@@ -4372,20 +4642,28 @@ export default function PopupDesignPage() {
       setEditorTab("design");
       return;
     }
-    if (!selectedPopupId) {
+
+    const rowId = configModal.mode === "edit" ? configModal.rowId : selectedPopupId;
+    if (!rowId) {
       const v = "__none__";
       if (hydrateVersion.current === v) return;
       hydrateVersion.current = v;
       applyEditorRef.current(hydrateFromConfig(defaultPopupDesignConfig()), "Untitled popup");
       return;
     }
-    const p = popups.find((x) => x.id === selectedPopupId);
+    const p = popups.find((x) => x.id === rowId);
     if (!p) return;
     const v = `${p.id}:${p.savedAt}`;
     if (hydrateVersion.current === v) return;
     hydrateVersion.current = v;
-    applyEditorRef.current(hydrateFromConfig(p.config), p.name || "Popup");
-  }, [configModal, selectedPopupId, popups]);
+    hydrateEditorFromPopup(p);
+  }, [configModal, selectedPopupId, popups, hydrateEditorFromPopup]);
+
+  useEffect(() => {
+    if (actionData?.ok && actionData?.intent === "save") {
+      closeConfigModal();
+    }
+  }, [actionData, closeConfigModal]);
 
   const applyReadyTemplate = useCallback((templateId) => {
     const t = POPUP_READY_TEMPLATES.find((x) => x.id === templateId);
@@ -4413,7 +4691,7 @@ export default function PopupDesignPage() {
   useEffect(() => {
     const d = fetcher.data;
     if (fetcher.state !== "idle" || !d?.ok) return;
-    const key = `${d.intent}-${d.rowId || ""}-${d.deletedId || ""}-${d.savedAt || ""}`;
+    const key = `${d.intent}-${d.rowId || ""}-${d.deletedId || ""}-${d.savedAt || ""}-${String(d.active)}`;
     if (fetchHandledKey.current === key) return;
     fetchHandledKey.current = key;
     if (d.intent === "create" || d.intent === "duplicate" || d.intent === "create_with_config") {
@@ -4434,13 +4712,11 @@ export default function PopupDesignPage() {
   }, []);
 
   const syncCountdown = (local) => { setCountdownLocal(local); setCountdownEndAt(fromDatetimeLocalValue(local)); };
-  const handleCopy = () => { navigator.clipboard?.writeText(popupDesignId); setCopied(true); setTimeout(() => setCopied(false), 1600); };
-
   const serializeEditorToParsedConfig = useCallback(() => {
     return parsePopupDesignConfig(JSON.stringify({
       designTemplateId, popupDesignId, headline, subheadline, couponCode, ctaText, ctaHref,
       countdownEndAt, showDelayMs, displayTrigger, showMode, repeatFrequencyMinutes, maxImpressions,
-      pageTarget, customPathContains, leftImageUrl, leftImageAlt, copyCouponButtonText,
+      pageTarget, exactPageUrl, leftImageUrl, leftImageAlt, copyCouponButtonText,
       copyCouponSuccessText, showDismissFootnote, dismissFootnoteText, layoutMode, dimOverlay,
       showTitle, titleBadgeText, visualStyle, showHeadline, showSubheadline, showContent, showTiming,
       modalTransparentShell, modalBorderRadius, modalMaxWidthPx, leftPanelBg, rightPanelBg,
@@ -4453,7 +4729,7 @@ export default function PopupDesignPage() {
   }, [
     designTemplateId, popupDesignId, headline, subheadline, couponCode, ctaText, ctaHref,
     countdownEndAt, showDelayMs, displayTrigger, showMode, repeatFrequencyMinutes, maxImpressions,
-    pageTarget, customPathContains, leftImageUrl, leftImageAlt, copyCouponButtonText,
+    pageTarget, exactPageUrl, leftImageUrl, leftImageAlt, copyCouponButtonText,
     copyCouponSuccessText, showDismissFootnote, dismissFootnoteText, layoutMode, dimOverlay,
     showTitle, titleBadgeText, visualStyle, showHeadline, showSubheadline, showContent, showTiming,
     modalTransparentShell, modalBorderRadius, modalMaxWidthPx, leftPanelBg, rightPanelBg,
@@ -4594,19 +4870,6 @@ export default function PopupDesignPage() {
 
     if (editorTab === "content") return (
       <>
-        {showEditorKey("design_id") && (
-          <TabSection title="Design ID" description="Paste this into your theme block or app embed.">
-            <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
-              <div style={{ flex: 1 }}>
-                <s-text-field label="Design ID" value={popupDesignId} readOnly placeholder="popup_summer_2025" />
-              </div>
-              <s-button type="button" variant="secondary" icon={copied ? "check-circle" : "duplicate"} onClick={handleCopy}>
-                {copied ? "Copied" : "Copy"}
-              </s-button>
-            </div>
-          </TabSection>
-        )}
-
         {showEditorKey("popup_name") && (
           <TabSection title="Internal Name">
             <Field label="Name (app list only - not shown on storefront)" value={popupName} onChange={(e) => setPopupName(e.currentTarget.value)} placeholder="Spring sale modal" />
@@ -4640,7 +4903,10 @@ export default function PopupDesignPage() {
         )}
 
         {showEditorKey("content_hero_image") && (
-          <TabSection title="Hero Image">
+          <TabSection
+            title="Hero Image"
+            description="Note: You can add any valid image URL here, including CDN image links and direct image URLs."
+          >
             <Field label="Image URL" value={leftImageUrl} onChange={(e) => setLeftImageUrl(e.currentTarget.value)} placeholder="https://cdn.shopify.com/..." />
             <Field label="Alt text (optional)" value={leftImageAlt} onChange={(e) => setLeftImageAlt(e.currentTarget.value)} />
           </TabSection>
@@ -4754,23 +5020,70 @@ export default function PopupDesignPage() {
 
     if (editorTab === "targeting") return (
       <>
-        <TabSection title="Page Targeting" description="Control which pages this popup can appear on.">
+        <TabSection
+          title="Page Targeting"
+          description="Target pages and Display control where the popup appears. Enable the site-wide app embed once in your theme — the app handles the rest automatically."
+        >
+          {selectedPopupId ? (
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: 8,
+                padding: "12px 14px",
+                borderRadius: 10,
+                border: "1px solid #e2e8f0",
+                background: "#f8fafc",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 14, fontWeight: 600, color: "#0f172a" }}>
+                  Display on storefront
+                </span>
+                <PopupDisplayToggle
+                  active={Boolean(selectedPopupRecord?.active)}
+                  disabled={fetcher.state !== "idle"}
+                  onChange={(next) => submitStorefrontDisplay(selectedPopupId, next)}
+                />
+              </div>
+              <s-text tone="subdued">
+                {selectedPopupRecord?.active
+                  ? `On — popup shows automatically on pages that match “${pageTarget === "all" ? "All pages" : pageTarget === "home" ? "Homepage only" : "Exact URL"}” below (site-wide embed must be enabled).`
+                  : "Off — hidden on the storefront until you turn Display on (targeting below is saved when you toggle on or Save)."}
+              </s-text>
+            </div>
+          ) : null}
           <s-select label="Target pages" value={pageTarget} onChange={(e) => setPageTarget(String(e.target?.value ?? pageTarget))}>
-            <s-option value="all">All pages</s-option>
             <s-option value="home">Homepage only</s-option>
-            <s-option value="product">Product pages</s-option>
-            <s-option value="collection">Collection pages</s-option>
-            <s-option value="cart">Cart page</s-option>
-            <s-option value="custom">URL contains…</s-option>
+            <s-option value="all">All pages</s-option>
+            <s-option value="exact">Exact URL</s-option>
           </s-select>
-          {pageTarget === "custom" && (
-            <Field label="URL must contain" value={customPathContains} onChange={(e) => setCustomPathContains(e.currentTarget.value)} placeholder="/collections/summer" />
+          {pageTarget === "exact" && (
+            <Field
+              label="Exact URL path"
+              value={exactPageUrl}
+              onChange={(e) => setExactPageUrl(e.currentTarget.value)}
+              placeholder="/products/gift-card or full product URL"
+            />
           )}
-          {targetingExplainer.needsSiteWideEmbed && (
-            <s-banner tone="warning" heading="Site-wide embed required">
-              Enable <strong>Online store → Themes → Customize → App embeds → "Popup design (site-wide)"</strong> for this rule to work on product, collection, cart, or custom URLs.
+          <s-banner tone="warning" heading="One-time theme setup">
+            Turn on <strong>Geekify storefront</strong> under App embeds and save your theme. No Design ID is required in
+            the theme — <strong>Target pages</strong> above controls where this popup appears.
+            {popupEmbedEditorUrl ? (
+              <>
+                {" "}
+                <s-link href={popupEmbedEditorUrl} target="_blank">
+                  Open theme app embeds
+                </s-link>
+              </>
+            ) : null}
+          </s-banner>
+          {pageTarget === "home" ? (
+            <s-banner tone="info" heading="Homepage only">
+              With <strong>Geekify storefront</strong> enabled, the app hides this popup outside the homepage when
+              Target pages is set to Homepage only.
             </s-banner>
-          )}
+          ) : null}
           <s-banner tone="info" heading="Where this popup opens">
             <ul style={{ margin: 0, paddingLeft: 18 }}>
               {targetingExplainer.bullets.map((line, i) => <li key={i} style={{ marginBottom: 4 }}>{line}</li>)}
@@ -4804,7 +5117,7 @@ export default function PopupDesignPage() {
   const hiddenFormInputs = (
     <>
       <input type="hidden" name="intent" value="save" />
-      <input type="hidden" name="rowId" value={selectedPopupId || ""} />
+      <input type="hidden" name="rowId" value={(configModal?.mode === "edit" ? configModal.rowId : selectedPopupId) || ""} />
       <input type="hidden" name="popupName" value={popupName} />
       <input type="hidden" name="designTemplateId" value={designTemplateId} />
       <input type="hidden" name="popupDesignId" value={popupDesignId} />
@@ -4832,7 +5145,7 @@ export default function PopupDesignPage() {
       <input type="hidden" name="repeatFrequencyMinutes" value={String(repeatFrequencyMinutes)} />
       <input type="hidden" name="maxImpressions" value={String(maxImpressions)} />
       <input type="hidden" name="pageTarget" value={pageTarget} />
-      <input type="hidden" name="customPathContains" value={customPathContains} />
+      <input type="hidden" name="exactPageUrl" value={exactPageUrl} />
       <input type="hidden" name="leftImageUrl" value={leftImageUrl} />
       <input type="hidden" name="leftImageAlt" value={leftImageAlt} />
       <input type="hidden" name="copyCouponButtonText" value={copyCouponButtonText} />
@@ -4876,6 +5189,14 @@ export default function PopupDesignPage() {
         .editor-tab{transition:all 0.15s}
         .editor-tab:hover{background:#f1f4f8 !important;color:#1a2233 !important}
         .editor-tab.active{background:#fff !important;color:#005bd3 !important;border-bottom:2px solid #005bd3 !important;font-weight:700 !important}
+        .popup-display-toggle{display:inline-flex;align-items:center;gap:8px;cursor:pointer;user-select:none}
+        .popup-display-toggle.is-disabled{opacity:0.55;cursor:not-allowed}
+        .popup-display-toggle input{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+        .popup-display-toggle-track{position:relative;width:40px;height:22px;border-radius:999px;background:#d1d5db;transition:background 0.2s;flex-shrink:0}
+        .popup-display-toggle.is-on .popup-display-toggle-track{background:rgb(0,123,95)}
+        .popup-display-toggle-thumb{position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,0.2);transition:transform 0.2s}
+        .popup-display-toggle.is-on .popup-display-toggle-thumb{transform:translateX(18px)}
+        .popup-display-toggle-text{font-size:12px;font-weight:600;color:#334155;min-width:22px}
         @keyframes sceDelOverlayIn{from{opacity:0}to{opacity:1}}
         @keyframes sceDelPanelIn{from{opacity:0;transform:scale(0.96) translateY(12px)}to{opacity:1;transform:scale(1) translateY(0)}}
       `}</style>
@@ -4900,7 +5221,7 @@ export default function PopupDesignPage() {
             {(actionData?.planUpgradeRequired || fetcher.data?.planUpgradeRequired) ? (
               <>
                 {" "}
-                <s-link href="/app/billing">View pricing</s-link>
+                <s-link href={billingUpgradeHref}>Upgrade Plan</s-link>
               </>
             ) : null}
           </s-banner>
@@ -4913,10 +5234,25 @@ export default function PopupDesignPage() {
               <div style={{ marginBottom: 16 }}>
                 <s-banner tone="info" heading={`${billingPlan.planName} plan`}>
                   Up to {popupMax} popup{popupMax === 1 ? "" : "s"} on Free.{" "}
-                  <s-link href="/app/billing">Upgrade to Premium</s-link> for unlimited popups.
+                  <s-link href={billingUpgradeHref}>Upgrade to Premium</s-link> for unlimited popups.
                 </s-banner>
               </div>
             ) : null}
+            <div style={{ marginBottom: 16 }}>
+              <s-banner tone="info" heading="Storefront delivery">
+                Enable <strong>Geekify storefront</strong> once under Theme → App embeds. Then use{" "}
+                <strong>Target pages</strong> (All pages, Homepage only, or Exact URL) and <strong>Display</strong> per popup —
+                no manual block placement on each template.
+                {popupEmbedEditorUrl ? (
+                  <>
+                    {" "}
+                    <s-link href={popupEmbedEditorUrl} target="_blank">
+                      Open theme app embeds
+                    </s-link>
+                  </>
+                ) : null}
+              </s-banner>
+            </div>
             <s-section >
               {popups.length === 0 ? (
                 /* Empty state */
@@ -4996,10 +5332,11 @@ export default function PopupDesignPage() {
                   <table className="popup-design-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                     <thead>
                       <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e8f0" }}>
-                      <th scope="col" style={{ textAlign: "left", padding: "12px 16px", fontWeight: 700, color: "#475569", fontSize: 11, letterSpacing: "0.04em", textTransform: "uppercase", whiteSpace: "nowrap" }}>Design ID</th>
                         <th scope="col" style={{ textAlign: "left", padding: "12px 16px", fontWeight: 700, color: "#475569", fontSize: 11, letterSpacing: "0.04em", textTransform: "uppercase" }}>Title</th>
+                        <th scope="col" style={{ textAlign: "left", padding: "12px 16px", fontWeight: 700, color: "#475569", fontSize: 11, letterSpacing: "0.04em", textTransform: "uppercase", whiteSpace: "nowrap" }}>Design ID</th>
                         <th scope="col" style={{ textAlign: "left", padding: "12px 16px", fontWeight: 700, color: "#475569", fontSize: 11, letterSpacing: "0.04em", textTransform: "uppercase", whiteSpace: "nowrap" }}>Type</th>
-                        <th scope="col" style={{ textAlign: "left", padding: "12px 16px", fontWeight: 700, color: "#475569", fontSize: 11, letterSpacing: "0.04em", textTransform: "uppercase" }}>Description</th>
+                        <th scope="col" style={{ textAlign: "left", padding: "12px 16px", fontWeight: 700, color: "#475569", fontSize: 11, letterSpacing: "0.04em", textTransform: "uppercase", whiteSpace: "nowrap" }}>Description</th>
+                        <th scope="col" style={{ textAlign: "center", padding: "12px 16px", fontWeight: 700, color: "#475569", fontSize: 11, letterSpacing: "0.04em", textTransform: "uppercase", whiteSpace: "nowrap" }}>Display</th>
                         <th scope="col" style={{ textAlign: "left", padding: "12px 16px", fontWeight: 700, color: "#475569", fontSize: 11, letterSpacing: "0.04em", textTransform: "uppercase", whiteSpace: "nowrap" }}>Actions</th>
                       </tr>
                     </thead>
@@ -5010,13 +5347,22 @@ export default function PopupDesignPage() {
                         const summaryShort = fullSummary.slice(0, 120);
                         const summaryTruncated = fullSummary.length > 120;
                         const cellPad = { padding: "14px 16px", verticalAlign: "top" };
+                        const rowPlanLocked = isPopupPlanLocked(p.id);
                         return (
-                          <tr key={p.id} className="popup-design-row" style={{ borderBottom: "1px solid #eef0f4", transition: "background 0.12s" }}>
-                            <td style={{ ...cellPad, fontFamily: "ui-monospace, monospace", fontSize: 11, fontWeight: 700, color: "#0f172a", wordBreak: "break-all", maxWidth: 180 }}>
-                              {p.config.popupDesignId}
-                            </td>
+                          <tr
+                            key={p.id}
+                            className={planLockedRowClassName(rowPlanLocked, "popup-design-row")}
+                            title={rowPlanLocked ? PLAN_LOCKED_ITEM_MESSAGE : undefined}
+                            style={{
+                              borderBottom: "1px solid #eef0f4",
+                              transition: "background 0.12s",
+                            }}
+                          >
                             <td style={{ ...cellPad, color: "#0f172a", maxWidth: 200 }}>
                               <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={p.name}>{p.name}</div>
+                            </td>
+                            <td style={{ ...cellPad, fontFamily: "ui-monospace, monospace", fontSize: 11, color: "#475569", maxWidth: 160 }}>
+                              <span style={{ wordBreak: "break-all" }} title={p.config.popupDesignId}>{p.config.popupDesignId || "—"}</span>
                             </td>
                             <td style={{ ...cellPad, whiteSpace: "nowrap" }}>
                               {meta?.name ? (
@@ -5032,6 +5378,33 @@ export default function PopupDesignPage() {
                                 <span style={{ color: "#aab4c8", fontStyle: "italic" }}>No headline set</span>
                               )}
                             </td>
+                            <td style={{ ...cellPad, textAlign: "center", verticalAlign: "middle" }}>
+                              <PopupDisplayToggle
+                                active={Boolean(p.active)}
+                                disabled={fetcher.state !== "idle" || rowPlanLocked}
+                                onChange={(next) => {
+                                  if (rowPlanLocked && next) return;
+                                  const fd = new FormData();
+                                  fd.set("intent", "set_active");
+                                  fd.set("rowId", p.id);
+                                  fd.set("active", next ? "1" : "0");
+                                  if (next) {
+                                    const useEditor = p.id === selectedPopupId;
+                                    fd.set(
+                                      "pageTarget",
+                                      useEditor ? pageTarget : String(p.config?.pageTarget || "all"),
+                                    );
+                                    fd.set(
+                                      "exactPageUrl",
+                                      useEditor
+                                        ? exactPageUrl
+                                        : String(p.config?.exactPageUrl || p.config?.customPathContains || ""),
+                                    );
+                                  }
+                                  fetcher.submit(fd, { method: "post" });
+                                }}
+                              />
+                            </td>
                             
                             <td style={{ ...cellPad, textAlign: "right", whiteSpace: "nowrap" }}>
                             <div style={{ display: "flex", gap: 8 }}>
@@ -5039,8 +5412,12 @@ export default function PopupDesignPage() {
     type="button"
     variant="secondary"
     icon="edit"
+    disabled={rowPlanLocked}
+    title={rowPlanLocked ? PLAN_LOCKED_ITEM_MESSAGE : undefined}
     onClick={() => {
-      hydrateVersion.current = "";
+      if (rowPlanLocked) return;
+      hydrateVersion.current = `${p.id}:${p.savedAt}`;
+      hydrateEditorFromPopup(p);
       setSelectedPopupId(p.id);
       setSearchParams({ popup: p.id });
       setConfigModal({ mode: "edit", rowId: p.id });
@@ -5049,23 +5426,15 @@ export default function PopupDesignPage() {
   > 
   </s-button>
 
-  <PlanGatedDeleteTooltip canDelete={canDeleteRecords} upgradeHref={billingUpgradeHref}>
-    <s-button
-      type="button"
-      variant="secondary"
-      tone="critical"
-      icon="delete"
-      disabled={!canDeleteRecords || fetcher.state !== "idle"}
-      onClick={
-        canDeleteRecords
-          ? () => {
-              setDeleteConfirmExiting(false);
-              setDeleteConfirm({ id: p.id });
-            }
-          : undefined
-      }
-    />
-  </PlanGatedDeleteTooltip>
+  <PlanGatedDeleteButton
+    canDelete={canDeleteRecords}
+    upgradeHref={billingUpgradeHref}
+    disabled={fetcher.state !== "idle"}
+    onClick={() => {
+      setDeleteConfirmExiting(false);
+      setDeleteConfirm({ id: p.id });
+    }}
+  />
 </div>
                             </td>
                           </tr>
@@ -5187,10 +5556,20 @@ export default function PopupDesignPage() {
           <div role="dialog" aria-modal="true"
             style={{ position: "fixed", inset: 0, zIndex: 180, background: "#f4f6fa", overflow: "auto" }}>
 
+            {configModal.mode === "edit" && selectedPopupPlanLocked ? (
+              <div
+                className={PLAN_LOCKED_PANEL_CLASS}
+                style={{ margin: "12px 24px 0", maxWidth: 960 }}
+              >
+                {PLAN_LOCKED_ITEM_MESSAGE}{" "}
+                <s-link href={billingUpgradeHref}>Upgrade to Premium</s-link> to edit this popup.
+              </div>
+            ) : null}
+
             {/* Editor top bar */}
             <div style={{ position: "sticky", top: 0, zIndex: 10, background: "#fff", borderBottom: "1px solid #e4e8f0", padding: "0 24px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, height: 60, boxShadow: "0 1px 6px rgba(20,40,90,0.06)" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <button type="button" onClick={() => { hydrateVersion.current = ""; setConfigModal(null); }}
+                <button type="button" onClick={closeConfigModal}
                   style={{ border: "none", background: "transparent", cursor: "pointer", padding: "6px 10px", borderRadius: 8, fontSize: 13, color: "#64748b", display: "flex", alignItems: "center", gap: 6 }}>
                   <s-icon type="chevron-left" size="small" />
                   Back
@@ -5203,7 +5582,32 @@ export default function PopupDesignPage() {
                   </span>
                 </div>
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                {configModal.mode === "edit" && selectedPopupId ? (
+                  <div
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 10,
+                      padding: "6px 12px",
+                      borderRadius: 8,
+                      border: "1px solid #e2e8f0",
+                      background: "#f8fafc",
+                    }}
+                  >
+                    <span style={{ fontSize: 12, fontWeight: 600, color: "#475569" }}>
+                      Display
+                    </span>
+                    <PopupDisplayToggle
+                      active={Boolean(selectedPopupRecord?.active)}
+                      disabled={fetcher.state !== "idle" || selectedPopupPlanLocked}
+                      onChange={(next) => {
+                        if (selectedPopupPlanLocked && next) return;
+                        submitStorefrontDisplay(selectedPopupId, next);
+                      }}
+                    />
+                  </div>
+                ) : null}
                 {actionData?.ok && actionData?.intent === "save" && (
                   <s-badge tone="success" icon="check-circle">Saved</s-badge>
                 )}
@@ -5216,7 +5620,13 @@ export default function PopupDesignPage() {
                 ) : (
                   <Form method="post" style={{ display: "contents" }}>
                     {hiddenFormInputs}
-                    <s-button type="submit" variant="primary" icon="save" disabled={!selectedPopupId}>
+                    <s-button
+                      type="submit"
+                      variant="primary"
+                      icon="save"
+                      disabled={!selectedPopupId || selectedPopupPlanLocked}
+                      title={selectedPopupPlanLocked ? PLAN_LOCKED_ITEM_MESSAGE : undefined}
+                    >
                       Save changes
                     </s-button>
                   </Form>
@@ -5225,7 +5635,10 @@ export default function PopupDesignPage() {
             </div>
 
             {/* Editor body */}
-            <div style={{ maxWidth: 1360, margin: "0 auto", padding: "24px 24px 60px", display: "grid", gridTemplateColumns: "minmax(300px, 420px) minmax(360px, 1fr)", gap: 24, alignItems: "start" }}>
+            <div
+              className={selectedPopupPlanLocked ? "sce-plan-locked-editor-body" : undefined}
+              style={{ maxWidth: 1360, margin: "0 auto", padding: "24px 24px 60px", display: "grid", gridTemplateColumns: "minmax(300px, 420px) minmax(360px, 1fr)", gap: 24, alignItems: "start" }}
+            >
 
               {/* LEFT: Tabbed settings panel */}
               <div style={{ background: "#fff", borderRadius: 16, border: "1px solid #e4e8f0", overflow: "hidden", boxShadow: "0 2px 12px rgba(20,40,90,0.06)" }}>
@@ -5357,12 +5770,6 @@ export default function PopupDesignPage() {
                   ))}
                 </div>
 
-                {popupDesignId && (
-                  <div style={{ marginTop: 10, background: "#fff", borderRadius: 10, border: "1px solid #e4e8f0", padding: "10px 14px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                    <span style={{ fontSize: 11, color: "#8896a8", fontWeight: 600 }}>DESIGN ID</span>
-                    <span style={{ fontFamily: "ui-monospace, monospace", fontSize: 12, color: "#2563eb", fontWeight: 600 }}>{popupDesignId}</span>
-                  </div>
-                )}
               </div>
             </div>
           </div>

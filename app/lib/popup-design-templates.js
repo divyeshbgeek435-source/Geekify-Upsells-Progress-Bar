@@ -4,7 +4,6 @@
  */
 export const POPUP_TEMPLATE_EDITOR_KEYS = [
   "theme_presets",
-  "design_id",
   "popup_name",
   "layout_mode",
   "visual_style",
