@@ -143,7 +143,7 @@ function getStorefrontTargetingExplainer(pageTarget, exactPageUrl) {
       break;
     case "home":
       bullets.push("Automatically shows on the Shopify homepage (page type index) or when the URL path is /.");
-      bullets.push("Hidden on product, collection, cart, and all other pages — no extra theme blocks needed on those templates.");
+      bullets.push("Hidden on product, collection, cart, and all other pages - no extra theme blocks needed on those templates.");
       bullets.push("Still enable the site-wide app embed once; the app hides the popup outside the homepage.");
       break;
     case "exact":
@@ -1297,7 +1297,7 @@ export default function PopupDesignPage() {
       <>
         <TabSection
           title="Page Targeting"
-          description="Target pages and Display control where the popup appears. Enable the site-wide app embed once in your theme — the app handles the rest automatically."
+          description="Target pages and Display control where the popup appears. Enable the site-wide app embed once in your theme - the app handles the rest automatically."
         >
           {selectedPopupId ? (
             <div
@@ -1323,8 +1323,8 @@ export default function PopupDesignPage() {
               </div>
               <s-text tone="subdued">
                 {selectedPopupRecord?.active
-                  ? `On — popup shows automatically on pages that match “${pageTarget === "all" ? "All pages" : pageTarget === "home" ? "Homepage only" : "Exact URL"}” below (site-wide embed must be enabled).`
-                  : "Off — hidden on the storefront until you turn Display on (targeting below is saved when you toggle on or Save)."}
+                  ? `On - popup shows automatically on pages that match “${pageTarget === "all" ? "All pages" : pageTarget === "home" ? "Homepage only" : "Exact URL"}” below (site-wide embed must be enabled).`
+                  : "Off - hidden on the storefront until you turn Display on (targeting below is saved when you toggle on or Save)."}
               </s-text>
             </div>
           ) : null}
@@ -1343,13 +1343,13 @@ export default function PopupDesignPage() {
           )}
           <s-banner tone="warning" heading="One-time theme setup">
             Turn on <strong>Geekify storefront</strong> under App embeds and save your theme. No Design ID is required in
-            the theme — <strong>Target pages</strong> above controls where this popup appears.
+            the theme - <strong>Target pages</strong> above controls where this popup appears.
             {popupEmbedEditorUrl ? (
               <>
                 {" "}
-                <s-link href={popupEmbedEditorUrl} target="_blank">
-                  Open theme app embeds
-                </s-link>
+                <s-button variant="primary" href={popupEmbedEditorUrl} target="_blank">
+                  Open Theme App Embeds
+                </s-button>
               </>
             ) : null}
           </s-banner>
@@ -1516,14 +1516,14 @@ export default function PopupDesignPage() {
             <div style={{ marginBottom: 16 }}>
               <s-banner tone="info" heading="Storefront delivery">
                 Enable <strong>Geekify storefront</strong> once under Theme → App embeds. Then use{" "}
-                <strong>Target pages</strong> (All pages, Homepage only, or Exact URL) and <strong>Display</strong> per popup —
+                <strong>Target pages</strong> (All pages, Homepage only, or Exact URL) and <strong>Display</strong> per popup -
                 no manual block placement on each template.
                 {popupEmbedEditorUrl ? (
                   <>
                     {" "}
-                    <s-link href={popupEmbedEditorUrl} target="_blank">
-                      Open theme app embeds
-                    </s-link>
+                    <s-button variant="primary" href={popupEmbedEditorUrl} target="_blank">
+                      Open Theme App Embeds
+                    </s-button>
                   </>
                 ) : null}
               </s-banner>
@@ -1608,7 +1608,7 @@ export default function PopupDesignPage() {
                     <thead>
                       <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e4e8f0" }}>
                         <th scope="col" style={{ textAlign: "left", padding: "12px 16px", fontWeight: 700, color: "#475569", fontSize: 11, letterSpacing: "0.04em", textTransform: "uppercase" }}>Title</th>
-                        <th scope="col" style={{ textAlign: "left", padding: "12px 16px", fontWeight: 700, color: "#475569", fontSize: 11, letterSpacing: "0.04em", textTransform: "uppercase", whiteSpace: "nowrap" }}>Design ID</th>
+                        {/* <th scope="col" style={{ textAlign: "left", padding: "12px 16px", fontWeight: 700, color: "#475569", fontSize: 11, letterSpacing: "0.04em", textTransform: "uppercase", whiteSpace: "nowrap" }}>Design ID</th> */}
                         <th scope="col" style={{ textAlign: "left", padding: "12px 16px", fontWeight: 700, color: "#475569", fontSize: 11, letterSpacing: "0.04em", textTransform: "uppercase", whiteSpace: "nowrap" }}>Type</th>
                         <th scope="col" style={{ textAlign: "left", padding: "12px 16px", fontWeight: 700, color: "#475569", fontSize: 11, letterSpacing: "0.04em", textTransform: "uppercase", whiteSpace: "nowrap" }}>Description</th>
                         <th scope="col" style={{ textAlign: "center", padding: "12px 16px", fontWeight: 700, color: "#475569", fontSize: 11, letterSpacing: "0.04em", textTransform: "uppercase", whiteSpace: "nowrap" }}>Display</th>
@@ -1636,9 +1636,9 @@ export default function PopupDesignPage() {
                             <td style={{ ...cellPad, color: "#0f172a", maxWidth: 200 }}>
                               <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={p.name}>{p.name}</div>
                             </td>
-                            <td style={{ ...cellPad, fontFamily: "ui-monospace, monospace", fontSize: 11, color: "#475569", maxWidth: 160 }}>
-                              <span style={{ wordBreak: "break-all" }} title={p.config.popupDesignId}>{p.config.popupDesignId || "—"}</span>
-                            </td>
+                            {/* <td style={{ ...cellPad, fontFamily: "ui-monospace, monospace", fontSize: 11, color: "#475569", maxWidth: 160 }}>
+                              <span style={{ wordBreak: "break-all" }} title={p.config.popupDesignId}>{p.config.popupDesignId || "-"}</span>
+                            </td> */}
                             <td style={{ ...cellPad, whiteSpace: "nowrap" }}>
                               {meta?.name ? (
                                 <span style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.08em", padding: "2px 8px",   }}>{meta.name}</span>

@@ -218,7 +218,7 @@ export function DiscAdvancedLiveWidget({
           </div>
         ) : null}
 
-        {/* Bar + badges + captions — shared horizontal inset so % positions match */}
+        {/* Bar + badges + captions - shared horizontal inset so % positions match */}
         <div className="disc-live-progress-rail" style={{ maxWidth: barMax, margin: "0 auto" }}>
           <div
             className="disc-live-bar-zone"
@@ -304,7 +304,7 @@ export function DiscAdvancedLiveWidget({
             ) : null}
           </div>
 
-          {/* Captions — same inset as bar zone for identical % positioning */}
+          {/* Captions - same inset as bar zone for identical % positioning */}
           <div
             className="disc-live-tier-captions-rail"
             style={{

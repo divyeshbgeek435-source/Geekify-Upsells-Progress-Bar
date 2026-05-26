@@ -233,3 +233,30 @@
   transform: translateY(-1px);
 }
 
+
+@media (max-width: 768px) {
+  .sce-announcement-bar__sticky-with-cta {
+    flex-wrap: nowrap;
+    gap: 8px;
+  }
+
+  .sce-announcement-bar__sticky-with-cta__main {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .sce-announcement-bar__message-line {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    word-break: normal;
+    overflow-wrap: normal;
+  }
+
+  .sce-announcement-bar__cta {
+    flex-shrink: 0;
+    padding: 4px 10px;
+    font-size: 0.8em;
+  }
+}

@@ -1431,27 +1431,24 @@ export function AnnouncementThemeSetupBanner({
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         <p style={{ margin: 0, lineHeight: 1.45 }}>
           <strong>Site-wide (recommended):</strong> Enable <strong>Geekify storefront</strong> under App
-          embeds — loads the announcement bar, tier progress, and popups. Save the theme after turning it on.
+          embeds - loads the announcement bar, tier progress, and popups. Save the theme after turning it on.
         </p>
         <p style={{ margin: 0, lineHeight: 1.45 }}>
-          <strong>Header section:</strong> Add <strong>Announcement bar (Header)</strong> in Theme →
-          Header for an inline bar in the header area.
-        </p>
-        <p style={{ margin: 0, fontSize: "0.8125rem", color: "#64748b" }}>
-          Leave Section ID empty in the theme block — the app uses whichever header announcement has
-          Display turned on here.
-        </p>
+  <strong>Header / Announcement bar: </strong>    If you turn this ON, it will automatically show on the frontend header.
+  <br />
+  <br />
+  <strong>Section / Announcement Bar: </strong>  
+  You can manually add blocks and set the ID there.  
+  It will display only when the same ID is added here and the Section Announcement Bar is enabled.
+</p>
+         
         <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
           {embedUrl ? (
-            <s-link href={embedUrl} target="_top">
-              Open app embeds
-            </s-link>
+            <s-button variant="primary" href={embedUrl} target="_top">
+              Open Theme App Embeds
+            </s-button>
           ) : null}
-          {blockHeaderUrl ? (
-            <s-link href={blockHeaderUrl} target="_top">
-              Add to theme header
-            </s-link>
-          ) : null}
+          
         </div>
       </div>
     </s-banner>
@@ -1960,7 +1957,7 @@ export function AnnouncementHeaderAdmin({
               {paginatedBars.map((b) => (
                 <s-table-row key={b.id}>
                    <s-table-cell>
-                    <s-text tone="neutral">—</s-text>
+                    <s-text tone="neutral">-</s-text>
                   </s-table-cell>
                   <s-table-cell>
                     <s-text type="strong">{b.name}</s-text>

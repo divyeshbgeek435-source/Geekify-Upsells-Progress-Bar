@@ -30,7 +30,7 @@ export const PLAN_CATALOG = [
       "1 popup design",
       "1 announcement header + 1 announcement Section",
       "Widget preview with dynamic tier names",
-      "Badge background colors per tier",
+      "Background colors per tier", 
       "Tier icons and badge icon colors",
     ],
     highlighted: false,

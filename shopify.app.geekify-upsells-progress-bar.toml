@@ -7,6 +7,8 @@ embedded = true
 
 [build]
 automatically_update_urls_on_dev = true
+include_config_on_deploy = true
+dev_store_url = "geekify-app.myshopify.com"
 
 [webhooks]
 api_version = "2026-07"
@@ -28,6 +30,14 @@ scopes = "write_app_proxy,read_customers,read_discounts,read_price_rules,read_sh
 url = "/apps/sce"
 prefix = "apps"
 subpath = "sce"
+
+# Storefront embed reads this when app proxy is unavailable (public JSON).
+[shop.metafields.app.storefront_config]
+type = "json"
+name = "SCE storefront config"
+description = "Tier progress bar and widget settings for the theme embed"
+access.admin = "merchant_read_write"
+access.storefront = "public_read"
 
 [auth]
 redirect_urls = [ "https://example.com/api/auth" ]

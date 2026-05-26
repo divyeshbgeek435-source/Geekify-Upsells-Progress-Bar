@@ -11,6 +11,24 @@
 {{ 'free-shipping-progress.css' | asset_url | stylesheet_tag }}
 {{ 'popup-design.css' | asset_url | stylesheet_tag }}
 
+{% comment %}
+  Fallback when /apps/sce/* app proxy returns 404.
+  App-owned shop metafield (synced when you open the app admin on THIS store).
+{% endcomment %}
+{% liquid
+  assign sce_storefront_config = shop.metafields['$app:storefront_config'].value
+  if sce_storefront_config == blank
+    assign sce_storefront_config = shop.metafields.app.storefront_config.value
+  endif
+%}
+{% if sce_storefront_config != blank %}
+  <script id="sce-inline-storefront-config" type="application/json">
+    {{ sce_storefront_config | json }}
+  </script>
+{% else %}
+  <!-- SCE: no storefront_config on {{ shop.permanent_domain }} - open Geekify app admin on this store, then refresh -->
+{% endif %}
+
 <script
   src="{{ 'announcement-bar.js' | asset_url }}"
   data-sce-announcement=""
@@ -35,6 +53,7 @@
   data-name-targets="{{ block.settings.name_selector_targets | escape }}"
   data-targets="{{ selector_targets | escape }}"
   data-log-url="/apps/sce/cart-access"
+  data-sce-shop="{{ shop.permanent_domain | escape }}"
   data-dynamic-tier-mode="true"
   data-log-enabled="{% if block.settings.enable_cart_access_log %}true{% else %}false{% endif %}"
   data-sequential-mode="{% if block.settings.sequential_unlock_mode %}true{% else %}false{% endif %}"
@@ -73,35 +92,6 @@
 {
   "name": "Geekify storefront",
   "target": "body",
-  "settings": [
-    {
-      "type": "paragraph",
-      "content": "Turn this embed on and save your theme. Loads the announcement bar, cart tier progress bar, and popups. Turn Display on for each feature in the app."
-    },
-    {
-      "type": "header",
-      "content": "Announcement bar"
-    },
-    {
-      "type": "text",
-      "id": "section_id",
-      "label": "Section ID (optional)",
-      "info": "Leave blank to use the active announcement from the app. Paste a Section ID to pin one specific bar."
-    },
-    {
-      "type": "text",
-      "id": "api_url",
-      "label": "Announcement API path",
-      "default": "/apps/sce/announcement-bar",
-      "info": "Default is correct for most stores. Change only if your app proxy subpath was customized."
-    },
-    {
-      "type": "number",
-      "id": "z_index",
-      "label": "Announcement z-index",
-      "default": 1000,
-      "info": "Stacking order above the theme header (1000 is usually enough)."
-    }
-  ]
+  
 }
 {% endschema %}

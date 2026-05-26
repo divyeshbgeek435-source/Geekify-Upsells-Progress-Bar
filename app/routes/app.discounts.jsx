@@ -53,6 +53,18 @@ import {
   resolveTierCaptionLabels,
   resolveWidgetPreviewMins,
 } from "../lib/tier-display.shared.js";
+import { syncStorefrontConfigToShopMetafield } from "../lib/storefront-config-sync.server.js";
+
+async function syncStorefrontForAdmin(admin, shop) {
+  try {
+    await syncStorefrontConfigToShopMetafield(admin, shop);
+  } catch (error) {
+    console.warn("[sce-storefront-sync] failed", {
+      shop,
+      message: error?.message || String(error),
+    });
+  }
+}
 
 const DISC_TIER_METRIC_ICON_BADGE_STYLE = {
   marginLeft: "auto",
@@ -1049,6 +1061,8 @@ export const loader = async ({ request }) => {
     console.warn("[tier-discount] loader auto-recovery failed", error);
   }
 
+  await syncStorefrontForAdmin(admin, session.shop);
+
   return {
     nodes,
     appDiscountTypes,
@@ -1239,6 +1253,7 @@ export const action = async ({ request }) => {
     const syncableTiers = await getSyncableTiers();
     const syncResult = await syncAutoTierDiscount(admin, syncableTiers);
     if (!syncResult.ok) return { ok: false, errors: { tier: syncResult.error } };
+    await syncStorefrontForAdmin(admin, session.shop);
     return { ok: true, tierIntent: intent };
   }
 
@@ -1399,6 +1414,7 @@ export const action = async ({ request }) => {
     const syncableTiers = await getSyncableTiers();
     const syncResult = await syncAutoTierDiscount(admin, syncableTiers);
     if (!syncResult.ok) return { ok: false, errors: { tier: syncResult.error } };
+    await syncStorefrontForAdmin(admin, session.shop);
     return { ok: true, tierIntent: intent };
   }
 
@@ -1436,6 +1452,7 @@ export const action = async ({ request }) => {
     const syncableTiers = await getSyncableTiers();
     const syncResult = await syncAutoTierDiscount(admin, syncableTiers);
     if (!syncResult.ok) return { ok: false, errors: { tier: syncResult.error } };
+    await syncStorefrontForAdmin(admin, session.shop);
     return { ok: true, tierIntent: intent };
   }
 
@@ -1451,6 +1468,7 @@ export const action = async ({ request }) => {
       const syncableTiers = await getSyncableTiers();
       const syncResult = await syncAutoTierDiscount(admin, syncableTiers);
       if (!syncResult.ok) return { ok: false, errors: { tier: syncResult.error } };
+      await syncStorefrontForAdmin(admin, session.shop);
       return { ok: true, tierIntent: intent };
     }
 
@@ -1644,6 +1662,7 @@ export const action = async ({ request }) => {
     const syncableTiers = await getSyncableTiers();
     const syncResult = await syncAutoTierDiscount(admin, syncableTiers);
     if (!syncResult.ok) return { ok: false, errors: { tier: syncResult.error } };
+    await syncStorefrontForAdmin(admin, session.shop);
     return { ok: true, tierIntent: intent };
   }
 
@@ -1832,6 +1851,7 @@ export const action = async ({ request }) => {
         },
       });
     }
+    await syncStorefrontForAdmin(admin, session.shop);
     return { ok: true, tierIntent: intent };
   }
 
@@ -5647,7 +5667,7 @@ export default function DiscountsIndex() {
                 <p className="disc-advanced-settings-intro-title">Customize badges</p>
                 <p className="disc-advanced-settings-intro-text">
                   Tier names come from your active discount tiers. On the Free plan you can set tier
-                  icons, badge backgrounds, and icon colors — save to publish to your storefront.
+                  icons, badge backgrounds, and icon colors - save to publish to your storefront.
                   {widgetPreviewTiers.length === 0
                     ? " Create and activate a discount with tiers to preview them here."
                     : ""}

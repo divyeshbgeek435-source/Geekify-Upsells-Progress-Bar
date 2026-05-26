@@ -4,7 +4,8 @@
   "scripts": {
     "postinstall": "prisma generate",
     "build": "prisma generate && react-router build",
-    "dev": "shopify app dev",
+    "dev": "shopify app dev --config shopify.app.geekify-upsells-progress-bar.toml --store dev-geekify-app.myshopify.com",
+    "sync:storefront": "node scripts/sync-storefront-config.mjs",
     "config:link": "shopify app config link",
     "generate": "shopify app generate",
     "deploy": "shopify app deploy",

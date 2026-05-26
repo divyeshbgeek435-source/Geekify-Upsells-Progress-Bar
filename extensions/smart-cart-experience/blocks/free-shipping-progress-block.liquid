@@ -5,6 +5,17 @@
 ></div>
 
 {{ 'free-shipping-progress.css' | asset_url | stylesheet_tag }}
+{% liquid
+  assign sce_storefront_config = shop.metafields['$app:storefront_config'].value
+  if sce_storefront_config == blank
+    assign sce_storefront_config = shop.metafields.app.storefront_config.value
+  endif
+%}
+{% if sce_storefront_config != blank %}
+  <script id="sce-inline-storefront-config" type="application/json">
+    {{ sce_storefront_config | json }}
+  </script>
+{% endif %}
 <script
   src="{{ 'free-shipping-progress.js' | asset_url }}"
   data-block-id="{{ block.id }}"

@@ -847,7 +847,7 @@ export default function AnnouncementsPage() {
                         </td>
                         <td {...cellProps}>
                           <span className="ann-section-id">
-                            {row.kind === "header" ? "—" : row.sectionId}
+                            {row.kind === "header" ? "-" : row.sectionId}
                           </span>
                         </td>
                         <td {...cellProps}>

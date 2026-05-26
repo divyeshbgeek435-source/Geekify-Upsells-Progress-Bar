@@ -9,7 +9,7 @@ import { templateRenderPayload } from "../lib/announcement-header-template.js";
 
 /**
  * App proxy: GET https://{shop}/apps/sce/announcement-bar?sectionId={sectionId}
- * sectionId optional — when omitted, returns the single Display-on header bar.
+ * sectionId optional - when omitted, returns the single Display-on header bar.
  * When provided, the bar must exist, match the ID, and have Display on.
  */
 export const loader = async ({ request }) => {

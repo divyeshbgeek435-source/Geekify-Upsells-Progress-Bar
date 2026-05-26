@@ -335,6 +335,211 @@
   }
 
   var proxyFetchWarned = false;
+  var cartAccessProxyFailed = false;
+  var hasInlineStorefrontConfig = false;
+
+  function readInlineStorefrontConfig() {
+    var el = document.getElementById("sce-inline-storefront-config");
+    if (!el) return null;
+    var raw = String(el.textContent || "").trim();
+    if (!raw) return null;
+    try {
+      var parsed = JSON.parse(raw);
+      return parsed && typeof parsed === "object" ? parsed : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function applyCartAccessPayload(data, cart) {
+    if (!data || !data.ok) return false;
+    if (data.sequentialMsg0) sequentialMsg0 = String(data.sequentialMsg0);
+    if (data.sequentialMsg1) sequentialMsg1 = String(data.sequentialMsg1);
+    if (data.sequentialMsg2) sequentialMsg2 = String(data.sequentialMsg2);
+    if (data.sequentialHintZero) sequentialHintZero = String(data.sequentialHintZero);
+    if (data.sequentialHintMid) sequentialHintMid = String(data.sequentialHintMid);
+    if (data.tier1Icon) tier1Icon = String(data.tier1Icon);
+    if (data.tier2Icon) tier2Icon = String(data.tier2Icon);
+    if (data.subtotalLabel) subtotalLabel = String(data.subtotalLabel);
+    if (data.estimatedShippingLabel)
+      estimatedShippingLabel = String(data.estimatedShippingLabel);
+    if (data.widgetBackgroundColor) widgetBackgroundColor = String(data.widgetBackgroundColor);
+    if (data.widgetTextColor) widgetTextColor = String(data.widgetTextColor);
+    if (data.widgetBorderColor) widgetBorderColor = String(data.widgetBorderColor);
+    widgetUseCustomColors = Boolean(data.widgetUseCustomColors);
+    if (data.tier1LabelText) tier1LabelText = String(data.tier1LabelText);
+    if (data.tier2LabelText) tier2LabelText = String(data.tier2LabelText);
+    if (data.tier1LabelText) tier1Label = tier1LabelText;
+    if (data.tier2LabelText) tier2Label = tier2LabelText;
+    if (data.minAmountPrefixText) minAmountPrefixText = String(data.minAmountPrefixText);
+    showTierIcons = data.showTierIcons !== false;
+    showTierLabels = data.showTierLabels !== false;
+    showTierMinimums = data.showTierMinimums !== false;
+    var dynamic = data.widgetDynamicConfig;
+    if (dynamic && typeof dynamic === "object") {
+      showHeading = dynamic.showHeading !== false;
+      showSubheading = dynamic.showSubheading !== false;
+      showTier1Heading = dynamic.showTier1Heading !== false;
+      showTier1Subheading = dynamic.showTier1Subheading !== false;
+      showTier2Heading = dynamic.showTier2Heading !== false;
+      showTier2Subheading = dynamic.showTier2Subheading !== false;
+      showHint = dynamic.showHint !== false;
+      if (dynamic.barFillColor) barFillColor = String(dynamic.barFillColor);
+      if (dynamic.barTrackColor) barTrackColor = String(dynamic.barTrackColor);
+      if (dynamic.iconBackgroundColor) iconBackgroundColor = String(dynamic.iconBackgroundColor);
+      if (dynamic.iconTextColor) iconTextColor = String(dynamic.iconTextColor);
+      if (dynamic.headingColor) headingColor = String(dynamic.headingColor);
+      if (dynamic.subheadingColor) subheadingColor = String(dynamic.subheadingColor);
+      if (dynamic.tierHeadingColor) tierHeadingColor = String(dynamic.tierHeadingColor);
+      if (dynamic.tierSubheadingColor) tierSubheadingColor = String(dynamic.tierSubheadingColor);
+      if (dynamic.hintColor) hintColor = String(dynamic.hintColor);
+    }
+    if (data.sequentialTitle) sequentialTitle = String(data.sequentialTitle);
+    if (data.progressBarDesign && typeof data.progressBarDesign === "object") {
+      lastProgressBarDesign = data.progressBarDesign;
+    }
+    if (data.selectorTargets && !pinnedMountSelector) {
+      var parsedTargets = String(data.selectorTargets)
+        .split(",")
+        .map(function (s) {
+          return s.trim();
+        })
+        .filter(Boolean);
+      selectorTargets = withDefaultWidgetTargets(parsedTargets);
+    }
+    if (data.nameTargetSelectors && !pinnedMountSelector) {
+      var parsedNameTargets = String(data.nameTargetSelectors)
+        .split(",")
+        .map(function (s) {
+          return s.trim();
+        })
+        .filter(Boolean);
+      if (parsedNameTargets.length) nameTargetSelectors = parsedNameTargets;
+    }
+    var prismaTierRows = Array.isArray(data.tiers) ? data.tiers : [];
+    var mapped = mapPrismaTiersToLegacyShippingTiers(prismaTierRows);
+    if (!mapped || mapped.length === 0) {
+      tiers = [];
+      applyDynamicTierLabels([]);
+      return true;
+    }
+    var exp = getShopCurrencyExponent(cart);
+    var nextTiers = parseTiers(JSON.stringify(mapped), shippingChargeCents, exp);
+    tiers = nextTiers;
+    applyDynamicTierLabels(prismaTierRows);
+    return true;
+  }
+
+  var bootInlineConfig = readInlineStorefrontConfig();
+  if (bootInlineConfig) {
+    hasInlineStorefrontConfig = applyCartAccessPayload(bootInlineConfig, null);
+    cartAccessProxyFailed = false;
+  }
+
+  function alternateShortCartAccessPath(primaryBase) {
+    var b = String(primaryBase || "").trim();
+    if (b.indexOf("/apps/sce/") !== 0) return "";
+    return b.slice("/apps/sce".length) || "/";
+  }
+
+  function uniqueStrings(list) {
+    var out = [];
+    var seen = {};
+    for (var i = 0; i < list.length; i++) {
+      var s = String(list[i] || "").trim();
+      if (!s || seen[s]) continue;
+      seen[s] = true;
+      out.push(s);
+    }
+    return out;
+  }
+
+  function buildCartAccessFetchUrls(baseLogUrl, subtotalCents, currencyCode) {
+    var primary = String(baseLogUrl || "").trim();
+    if (!primary) return [];
+    var bases = uniqueStrings([
+      primary,
+      alternateShortCartAccessPath(primary),
+      "/apps/sce/cart-access",
+      "/cart-access",
+    ]);
+    var qs =
+      "subtotalCents=" + encodeURIComponent(String(subtotalCents || 0)) +
+      (currencyCode ? "&currency=" + encodeURIComponent(currencyCode) : "");
+    return bases.map(function (base) {
+      if (base.indexOf("?") === -1) return base + "?" + qs;
+      return base + "&" + qs;
+    });
+  }
+
+  function fetchCartAccessJson(urls, index) {
+    if (!urls || !urls.length || index >= urls.length) {
+      cartAccessProxyFailed = true;
+      return Promise.resolve(null);
+    }
+    var url = urls[index];
+    return fetch(url, {
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    })
+      .then(function (r) {
+        var ct = String(r.headers.get("content-type") || "").toLowerCase();
+        var looksLikeJson =
+          ct.indexOf("application/json") !== -1 || ct.indexOf("text/json") !== -1;
+        if (!looksLikeJson) {
+          if (index + 1 < urls.length) return fetchCartAccessJson(urls, index + 1);
+          if (!proxyFetchWarned) {
+            proxyFetchWarned = true;
+            console.warn(
+              "[SCE] App proxy returned non-JSON for cart-access:",
+              url,
+              "HTTP",
+              r.status,
+              "- Run shopify app dev (or deploy), enable write_app_proxy, and open https://YOUR-STORE.myshopify.com/apps/sce/health on the storefront.",
+            );
+          }
+          return null;
+        }
+        if (!r.ok) {
+          if (index + 1 < urls.length) return fetchCartAccessJson(urls, index + 1);
+          if (!proxyFetchWarned) {
+            proxyFetchWarned = true;
+            console.warn(
+              "[SCE] App proxy request failed:",
+              url,
+              "HTTP",
+              r.status,
+              "- Run shopify app deploy, enable write_app_proxy, and open https://YOUR-STORE.myshopify.com/apps/sce/health in the browser.",
+            );
+          }
+          return null;
+        }
+        return r.json().then(function (data) {
+          if (data && data.error === "app_proxy_auth_failed" && !proxyFetchWarned) {
+            proxyFetchWarned = true;
+            console.warn("[SCE] App proxy auth failed:", data.hint || data.error);
+          }
+          if (data && data.ok === true) {
+            cartAccessProxyFailed = false;
+            return data;
+          }
+          var retryable =
+            !data ||
+            data.error === "app_proxy_auth_failed" ||
+            data.error === "missing_shop";
+          if (index + 1 < urls.length && retryable) {
+            return fetchCartAccessJson(urls, index + 1);
+          }
+          return data;
+        });
+      })
+      .catch(function () {
+        if (index + 1 < urls.length) return fetchCartAccessJson(urls, index + 1);
+        return null;
+      });
+  }
+
   function safeFetchJson(url) {
     return fetch(url, { credentials: "same-origin" })
       .then(function (r) {
@@ -437,6 +642,7 @@
 
   function refreshDynamicTiersWithCart(cart) {
     if (!dynamicTierMode || !logUrl) return Promise.resolve(false);
+    cartAccessProxyFailed = false;
     var subtotalCents = getCartSubtotalCents(cart);
     var cur = cart && cart.currency ? String(cart.currency).trim() : "";
     var fetchSig = String(subtotalCents || 0) + "_" + cur;
@@ -447,93 +653,18 @@
     }
     lastTierFetchSig = fetchSig;
     lastTierFetchAt = now;
-    var url = logUrl;
-    if (url.indexOf("?") === -1) url += "?";
-    else url += "&";
-    url += "subtotalCents=" + encodeURIComponent(String(subtotalCents || 0));
-    if (cur) url += "&currency=" + encodeURIComponent(cur);
-    return safeFetchJson(url).then(function (data) {
+    var urls = buildCartAccessFetchUrls(logUrl, subtotalCents, cur);
+    return fetchCartAccessJson(urls, 0).then(function (data) {
       if (!data || !data.ok) {
-        /** Theme JSON tiers are offline placeholders; if the proxy fails, keep the same empty UI as the cart widget. */
-        tiers = [];
-        applyDynamicTierLabels([]);
+        if (!hasInlineStorefrontConfig) {
+          tiers = [];
+          applyDynamicTierLabels([]);
+        }
+        cartAccessProxyFailed = !hasInlineStorefrontConfig;
         return false;
       }
-      if (data.sequentialMsg0) sequentialMsg0 = String(data.sequentialMsg0);
-      if (data.sequentialMsg1) sequentialMsg1 = String(data.sequentialMsg1);
-      if (data.sequentialMsg2) sequentialMsg2 = String(data.sequentialMsg2);
-      if (data.sequentialHintZero) sequentialHintZero = String(data.sequentialHintZero);
-      if (data.sequentialHintMid) sequentialHintMid = String(data.sequentialHintMid);
-      if (data.tier1Icon) tier1Icon = String(data.tier1Icon);
-      if (data.tier2Icon) tier2Icon = String(data.tier2Icon);
-      if (data.subtotalLabel) subtotalLabel = String(data.subtotalLabel);
-      if (data.estimatedShippingLabel)
-        estimatedShippingLabel = String(data.estimatedShippingLabel);
-      if (data.widgetBackgroundColor) widgetBackgroundColor = String(data.widgetBackgroundColor);
-      if (data.widgetTextColor) widgetTextColor = String(data.widgetTextColor);
-      if (data.widgetBorderColor) widgetBorderColor = String(data.widgetBorderColor);
-      widgetUseCustomColors = Boolean(data.widgetUseCustomColors);
-      if (data.tier1LabelText) tier1LabelText = String(data.tier1LabelText);
-      if (data.tier2LabelText) tier2LabelText = String(data.tier2LabelText);
-      if (data.tier1LabelText) tier1Label = tier1LabelText;
-      if (data.tier2LabelText) tier2Label = tier2LabelText;
-      if (data.minAmountPrefixText) minAmountPrefixText = String(data.minAmountPrefixText);
-      showTierIcons = data.showTierIcons !== false;
-      showTierLabels = data.showTierLabels !== false;
-      showTierMinimums = data.showTierMinimums !== false;
-      var dynamic = data.widgetDynamicConfig;
-      if (dynamic && typeof dynamic === "object") {
-        showHeading = dynamic.showHeading !== false;
-        showSubheading = dynamic.showSubheading !== false;
-        showTier1Heading = dynamic.showTier1Heading !== false;
-        showTier1Subheading = dynamic.showTier1Subheading !== false;
-        showTier2Heading = dynamic.showTier2Heading !== false;
-        showTier2Subheading = dynamic.showTier2Subheading !== false;
-        showHint = dynamic.showHint !== false;
-        if (dynamic.barFillColor) barFillColor = String(dynamic.barFillColor);
-        if (dynamic.barTrackColor) barTrackColor = String(dynamic.barTrackColor);
-        if (dynamic.iconBackgroundColor) iconBackgroundColor = String(dynamic.iconBackgroundColor);
-        if (dynamic.iconTextColor) iconTextColor = String(dynamic.iconTextColor);
-        if (dynamic.headingColor) headingColor = String(dynamic.headingColor);
-        if (dynamic.subheadingColor) subheadingColor = String(dynamic.subheadingColor);
-        if (dynamic.tierHeadingColor) tierHeadingColor = String(dynamic.tierHeadingColor);
-        if (dynamic.tierSubheadingColor) tierSubheadingColor = String(dynamic.tierSubheadingColor);
-        if (dynamic.hintColor) hintColor = String(dynamic.hintColor);
-      }
-      if (data.sequentialTitle) sequentialTitle = String(data.sequentialTitle);
-      if (data.progressBarDesign && typeof data.progressBarDesign === "object") {
-        lastProgressBarDesign = data.progressBarDesign;
-      }
-      if (data.selectorTargets && !pinnedMountSelector) {
-        var parsedTargets = String(data.selectorTargets)
-          .split(",")
-          .map(function (s) {
-            return s.trim();
-          })
-          .filter(Boolean);
-        selectorTargets = withDefaultWidgetTargets(parsedTargets);
-      }
-      if (data.nameTargetSelectors && !pinnedMountSelector) {
-        var parsedNameTargets = String(data.nameTargetSelectors)
-          .split(",")
-          .map(function (s) {
-            return s.trim();
-          })
-          .filter(Boolean);
-        if (parsedNameTargets.length) nameTargetSelectors = parsedNameTargets;
-      }
-      var prismaTierRows = Array.isArray(data.tiers) ? data.tiers : [];
-      var mapped = mapPrismaTiersToLegacyShippingTiers(prismaTierRows);
-      if (!mapped || mapped.length === 0) {
-        tiers = [];
-        applyDynamicTierLabels([]);
-        return true;
-      }
-      var exp = getShopCurrencyExponent(cart);
-      var nextTiers = parseTiers(JSON.stringify(mapped), shippingChargeCents, exp);
-      tiers = nextTiers;
-      applyDynamicTierLabels(prismaTierRows);
-      return true;
+      cartAccessProxyFailed = false;
+      return applyCartAccessPayload(data, cart);
     });
   }
 
@@ -1097,8 +1228,21 @@
         titleEmpty.style.color = headingColor;
       }
       if (messageEmpty) {
-        messageEmpty.textContent =
-          "Hey, please go to the app and create a tier discount there 😊 After that, it will automatically show up here.";
+        var shopHost =
+          (script.dataset.sceShop || "").trim() ||
+          (window.Shopify && window.Shopify.shop) ||
+          "";
+        if (cartAccessProxyFailed && !hasInlineStorefrontConfig) {
+          messageEmpty.textContent =
+            "Rewards are not connected for " +
+            (shopHost || "this store") +
+            ". (1) Run npm run dev and pick this store. (2) Open the Geekify app in Shopify admin on " +
+            (shopHost || "this store") +
+            " and load Home or Discounts once. (3) Run shopify app deploy. (4) Refresh this page. Test: /apps/sce/health should return JSON, not 404.";
+        } else {
+          messageEmpty.textContent =
+            "Hey, please go to the app and create an active tier discount there 😊 After that, it will automatically show up here.";
+        }
         messageEmpty.style.display = showSubheading ? "" : "none";
         messageEmpty.style.color = subheadingColor;
       }

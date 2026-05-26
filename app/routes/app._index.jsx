@@ -9,6 +9,7 @@ import {
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import { loadShopBillingContext } from "../lib/app-billing.server.js";
+import { syncStorefrontConfigToShopMetafield } from "../lib/storefront-config-sync.server.js";
 import prisma from "../db.server";
 import {
   ChartVerticalIcon,
@@ -354,6 +355,15 @@ export const loader = async ({ request }) => {
   }
 
   const setupHasTierDiscount = tierDiscounts.length > 0;
+
+  try {
+    await syncStorefrontConfigToShopMetafield(admin, session.shop);
+  } catch (error) {
+    console.warn("[sce-storefront-sync] home loader failed", {
+      shop: session.shop,
+      message: error?.message || String(error),
+    });
+  }
 
   return {
     tierRules,
@@ -1014,7 +1024,7 @@ function SetupGuideSection({ onboarding, setupDetection, withShopifyParams }) {
                   <div className="setup-guide-step-body">
                     Create and customize the popup, set <strong>Target pages</strong>, then turn <strong>Display</strong> on
                     in the popup list. With <strong>Geekify storefront</strong> enabled under App embeds, visitors see
-                    popups when Display and targeting match—no Design ID in the theme.
+                    popups when Display and targeting match-no Design ID in the theme.
                     <div className="setup-guide-step-actions">
                       <button type="button" className="setup-guide-a-primary" onClick={goPopup}>
                         Open Popup designer

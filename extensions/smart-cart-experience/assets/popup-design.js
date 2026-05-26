@@ -1372,9 +1372,10 @@
   function refresh() {
     var urls = popupFetchUrls();
     if (!urls.length) return;
+    var primaryFetchUrl = urls[0];
     fetchPopupConfig(0, urls)
       .then(function (wrapped) {
-        var fetchUrl = wrapped && wrapped.fetchUrl ? wrapped.fetchUrl : urls[0];
+        var fetchUrl = wrapped && wrapped.fetchUrl ? wrapped.fetchUrl : primaryFetchUrl;
         if (!wrapped || !wrapped.data || wrapped.data.ok !== true || wrapped.data.active === false) {
           removePopup();
           if (!wrapped || !wrapped.data || wrapped.data.ok !== true) {
@@ -1395,7 +1396,7 @@
                     : wrapped.data.error === "popup_inactive"
                       ? "That popup is saved but Display is off in the app."
                       : wrapped.data.hint || "";
-                console.warn("[SCE Popup] " + wrapped.data.error + (errHint ? " — " + errHint : ""), fetchUrl);
+                console.warn("[SCE Popup] " + wrapped.data.error + (errHint ? " - " + errHint : ""), fetchUrl);
               }
             }
           }
@@ -1461,9 +1462,9 @@
           window.__scePopupProxyWarned = true;
           console.warn(
             "[SCE Popup] Could not load popup config from app proxy:",
-            fetchUrl,
+            primaryFetchUrl,
             err && err.message ? err.message : err,
-            "- Deploy the app with [app_proxy], enable Theme → App embeds → Geekify storefront, and test https://YOUR-STORE.myshopify.com/apps/sce/health",
+            "- Run shopify app dev on this store (or deploy), enable Theme → App embeds → Geekify storefront, and test https://YOUR-STORE.myshopify.com/apps/sce/health",
           );
         }
       });
