@@ -2,7 +2,7 @@
 
 client_id = "de1d7a5b81576a9436521ad0bfc23320"
 name = "Geekify: Upsell Progress Bar"
-application_url = "https://example.com"
+application_url = "https://geekify-upsells-progress-bar-production.up.railway.app"
 embedded = true
 
 [webhooks]
@@ -26,7 +26,7 @@ description = "Tier progress bar and widget settings for the theme embed"
   storefront = "public_read"
 
 [app_proxy]
-url = "https://example.com/apps/sce"
+url = "/apps/sce"
 subpath = "sce"
 prefix = "apps"
 
@@ -35,7 +35,7 @@ prefix = "apps"
 scopes = "read_customers,read_discounts,read_price_rules,read_shipping,write_app_proxy,write_cart_transforms,write_customers,write_discounts,write_metaobject_definitions,write_metaobjects,write_price_rules,write_products,write_shipping"
 
 [auth]
-redirect_urls = [ "https://example.com/api/auth" ]
+redirect_urls = [ "https://geekify-upsells-progress-bar-production.up.railway.app/auth/callback" ]
 
 [build]
 automatically_update_urls_on_dev = true
