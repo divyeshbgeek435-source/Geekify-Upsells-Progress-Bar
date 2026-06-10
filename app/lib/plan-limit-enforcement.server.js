@@ -201,6 +201,7 @@ export async function loadShopPlanSlots(shop, planId) {
   if (isPremiumPlan(planId)) {
     return {
       editableDiscountNames: null,
+      allDiscountNames: null,
       editablePopupIds: null,
       editableAnnouncementHeaderIds: null,
       editableAnnouncementBodyIds: null,
@@ -247,11 +248,19 @@ export async function loadShopPlanSlots(shop, planId) {
     }),
   ]);
 
+  const discountPartition = partitionItemsByPlanLimit(
+    discountRows,
+    limits.maxDiscounts,
+  );
+  const allDiscountNames = discountRows
+    .map((r) => String(r.name || "").trim())
+    .filter(Boolean);
+
   return {
-    editableDiscountNames: partitionItemsByPlanLimit(
-      discountRows,
-      limits.maxDiscounts,
-    ).allowed.map((r) => String(r.name || "").trim()).filter(Boolean),
+    editableDiscountNames: discountPartition.allowed
+      .map((r) => String(r.name || "").trim())
+      .filter(Boolean),
+    allDiscountNames,
     editablePopupIds: partitionItemsByPlanLimit(popupRows, limits.maxPopups)
       .allowed.map((r) => r.id)
       .filter(Boolean),
@@ -353,6 +362,7 @@ export async function syncShopPlanState(shop, currentPlanId) {
  * @param {string} planId
  * @param {{
  *   editableDiscountNames?: string[],
+ *   allDiscountNames?: string[],
  *   editablePopupIds?: string[],
  *   editableAnnouncementHeaderIds?: string[],
  *   editableAnnouncementBodyIds?: string[],
@@ -365,7 +375,8 @@ export function rejectIfPlanItemLocked(planId, planSlots, target) {
   if (target.discountName) {
     const name = String(target.discountName || "").trim();
     const allowed = planSlots?.editableDiscountNames ?? [];
-    if (name && !allowed.includes(name)) {
+    const allKnown = planSlots?.allDiscountNames ?? [];
+    if (name && !allowed.includes(name) && allKnown.includes(name)) {
       return {
         ok: false,
         error: PLAN_LOCKED_ITEM_MESSAGE,

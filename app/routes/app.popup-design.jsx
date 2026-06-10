@@ -33,11 +33,18 @@ import {
 import { authenticate } from "../shopify.server";
 import {
   loadShopBillingContext,
+  rejectIfAppLocked,
   rejectIfDeleteNotAllowed,
   rejectIfPopupLimitReached,
+  rejectIfPopupTargetingNotAllowed,
+  clampPopupTargetingForPlan,
 } from "../lib/app-billing.server.js";
 import { rejectIfPlanItemLocked } from "../lib/plan-limit-enforcement.server.js";
-import { getPlanLimits } from "../lib/app-plans.shared.js";
+import {
+  canUsePopupTargeting,
+  FREE_PLAN_POPUP_TARGETING_UPGRADE_MESSAGE,
+  getPlanLimits,
+} from "../lib/app-plans.shared.js";
 import {
   isPopupEditableOnPlan,
   PLAN_LOCKED_ITEM_MESSAGE,
@@ -263,6 +270,8 @@ export const action = async ({ request }) => {
   const { session, billing } = await authenticate.admin(request);
   const shop = session.shop;
   const billingPlan = await loadShopBillingContext(billing, shop);
+  const appLockErr = rejectIfAppLocked(billingPlan);
+  if (appLockErr) return appLockErr;
   const form = await request.formData();
   const intent = String(form.get("intent") || "");
   const planSlots = billingPlan.planSlots;
@@ -304,6 +313,7 @@ export const action = async ({ request }) => {
     const rawJson = String(form.get("configJson") || "{}");
     let cfg;
     try { cfg = parsePopupDesignConfig(rawJson); } catch { return { ok: false, error: "Invalid popup configuration." }; }
+    cfg = clampPopupTargetingForPlan(cfg, billingPlan.planId);
     cfg.popupDesignId = String(cfg.popupDesignId || "").trim() || generatePopupDesignId();
     const configJson = JSON.stringify(cfg);
     const templatePayload = buildPopupTemplate({ name, popupDesignId: cfg.popupDesignId, configJson, templateJson: "{}" });
@@ -331,7 +341,10 @@ export const action = async ({ request }) => {
     const src = await prisma.popupDesign.findFirst({ where: { id: rowId, shop } });
     if (!src) return { ok: false, error: "Popup not found." };
     const parsed = parsePopupDesignConfig(src.configJson);
-    const next = { ...parsed, popupDesignId: generatePopupDesignId() };
+    const next = clampPopupTargetingForPlan(
+      { ...parsed, popupDesignId: generatePopupDesignId() },
+      billingPlan.planId,
+    );
     const config = parsePopupDesignConfig(JSON.stringify(next));
     const name = `${src.name} (copy)`.slice(0, 120);
     const configJson = JSON.stringify(config);
@@ -353,6 +366,12 @@ export const action = async ({ request }) => {
     let parsedCfg = parsePopupDesignConfig(row.configJson);
     const nextTarget = normalizePopupPageTarget(String(form.get("pageTarget") || parsedCfg.pageTarget));
     const exactRaw = String(form.get("exactPageUrl") || form.get("customPathContains") || "").trim();
+    const targetingErr = rejectIfPopupTargetingNotAllowed(
+      billingPlan.planId,
+      nextTarget,
+      exactRaw,
+    );
+    if (targetingErr) return targetingErr;
     parsedCfg = parsePopupDesignConfig(
       JSON.stringify({
         ...parsedCfg,
@@ -418,6 +437,12 @@ export const action = async ({ request }) => {
     let parsedCfg = parsePopupDesignConfig(row.configJson);
     if (formTargetAlways) {
       const nextTarget = normalizePopupPageTarget(formTargetAlways);
+      const targetingErr = rejectIfPopupTargetingNotAllowed(
+        billingPlan.planId,
+        nextTarget,
+        formExactAlways,
+      );
+      if (targetingErr) return targetingErr;
       parsedCfg = parsePopupDesignConfig(
         JSON.stringify({
           ...parsedCfg,
@@ -427,6 +452,7 @@ export const action = async ({ request }) => {
         }),
       );
     }
+    parsedCfg = clampPopupTargetingForPlan(parsedCfg, billingPlan.planId);
     if (parsedCfg.pageTarget === "exact" && !parsedCfg.exactPageUrl) {
       return { ok: false, error: "Enter an exact URL path before turning Display on." };
     }
@@ -468,7 +494,13 @@ export const action = async ({ request }) => {
     select: { id: true, templateJson: true, popupDesignId: true, active: true, configJson: true },
   });
   if (!owned) return { ok: false, error: "Popup not found." };
-  const config = buildConfigPayload(form);
+  let config = clampPopupTargetingForPlan(buildConfigPayload(form), billingPlan.planId);
+  const saveTargetingErr = rejectIfPopupTargetingNotAllowed(
+    billingPlan.planId,
+    config.pageTarget,
+    config.exactPageUrl,
+  );
+  if (saveTargetingErr) return saveTargetingErr;
   if (config.pageTarget === "exact" && !config.exactPageUrl) {
     return { ok: false, error: "Enter an exact URL path for Exact URL targeting." };
   }
@@ -682,6 +714,7 @@ export default function PopupDesignPage() {
   const popupEmbedEditorUrl = onboarding?.popupDesignEmbedEditorUrl || onboarding?.legacyPopupDesignEmbedUrl || null;
   const canDeleteRecords = Boolean(billingPlan?.isPremium);
   const billingUpgradeHref = useBillingUpgradeHref();
+  const canUsePopupTargetingOnPlan = canUsePopupTargeting(billingPlan?.planId);
   const actionData = useActionData();
   const fetcher = useFetcher();
   const revalidator = useRevalidator();
@@ -766,6 +799,12 @@ export default function PopupDesignPage() {
   const [tablePageSize, setTablePageSize] = useState(10);
   const [tablePage, setTablePage] = useState(1);
 
+  useEffect(() => {
+    if (canUsePopupTargetingOnPlan) return;
+    if (pageTarget !== "all") setPageTarget("all");
+    if (exactPageUrl) setExactPageUrl("");
+  }, [canUsePopupTargetingOnPlan, pageTarget, exactPageUrl]);
+
   const totalPopupRecords = popups.length;
   const popupMax = billingPlan?.limits?.maxPopups ?? getPlanLimits(billingPlan?.planId).maxPopups;
   const atPopupLimit =
@@ -797,12 +836,16 @@ export default function PopupDesignPage() {
     (rowId, active) => {
       if (!rowId) return;
       const rec = popups.find((p) => p.id === rowId);
-      const targetForRow =
-        rec?.id === selectedPopupId ? pageTarget : String(rec?.config?.pageTarget || "all");
-      const exactForRow =
-        rec?.id === selectedPopupId
+      const targetForRow = canUsePopupTargetingOnPlan
+        ? rec?.id === selectedPopupId
+          ? pageTarget
+          : String(rec?.config?.pageTarget || "all")
+        : "all";
+      const exactForRow = canUsePopupTargetingOnPlan
+        ? rec?.id === selectedPopupId
           ? exactPageUrl
-          : String(rec?.config?.exactPageUrl || rec?.config?.customPathContains || "");
+          : String(rec?.config?.exactPageUrl || rec?.config?.customPathContains || "")
+        : "";
       const fd = new FormData();
       fd.set("intent", "set_active");
       fd.set("rowId", rowId);
@@ -811,7 +854,7 @@ export default function PopupDesignPage() {
       fd.set("exactPageUrl", exactForRow);
       fetcher.submit(fd, { method: "post" });
     },
-    [fetcher, pageTarget, exactPageUrl, popups, selectedPopupId],
+    [fetcher, pageTarget, exactPageUrl, popups, selectedPopupId, canUsePopupTargetingOnPlan],
   );
   const activeTemplateForKeys = configModal?.mode === "create" ? configModal.templateId : designTemplateId;
   const editorKeyList = useMemo(() => getEditorKeysForTemplateId(activeTemplateForKeys), [activeTemplateForKeys]);
@@ -821,6 +864,7 @@ export default function PopupDesignPage() {
 
   const targetingSyncRef = useRef("");
   useEffect(() => {
+    if (!canUsePopupTargetingOnPlan) return;
     if (!selectedPopupId || !selectedPopupRecord || fetcher.state !== "idle") return;
     const savedTarget = normalizePopupPageTarget(selectedPopupRecord.config?.pageTarget);
     const savedExact = getExactPageUrl(selectedPopupRecord.config || {});
@@ -850,6 +894,7 @@ export default function PopupDesignPage() {
     selectedPopupRecord?.config,
     fetcher.state,
     fetcher,
+    canUsePopupTargetingOnPlan,
   ]);
   useEffect(() => {
     if (tablePage > totalTablePages) setTablePage(totalTablePages);
@@ -1299,6 +1344,21 @@ export default function PopupDesignPage() {
           title="Page Targeting"
           description="Target pages and Display control where the popup appears. Enable the site-wide app embed once in your theme - the app handles the rest automatically."
         >
+          {!canUsePopupTargetingOnPlan ? (
+            <s-banner tone="info" heading="Upgrade to Pro">
+              {FREE_PLAN_POPUP_TARGETING_UPGRADE_MESSAGE}{" "}
+              <s-link href={billingUpgradeHref}>Upgrade to Pro</s-link>
+            </s-banner>
+          ) : null}
+          <div
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              gap: 12,
+              opacity: canUsePopupTargetingOnPlan ? 1 : 0.55,
+              pointerEvents: canUsePopupTargetingOnPlan ? "auto" : "none",
+            }}
+          >
           {selectedPopupId ? (
             <div
               style={{
@@ -1317,7 +1377,7 @@ export default function PopupDesignPage() {
                 </span>
                 <PopupDisplayToggle
                   active={Boolean(selectedPopupRecord?.active)}
-                  disabled={fetcher.state !== "idle"}
+                  disabled={!canUsePopupTargetingOnPlan || fetcher.state !== "idle"}
                   onChange={(next) => submitStorefrontDisplay(selectedPopupId, next)}
                 />
               </div>
@@ -1328,7 +1388,12 @@ export default function PopupDesignPage() {
               </s-text>
             </div>
           ) : null}
-          <s-select label="Target pages" value={pageTarget} onChange={(e) => setPageTarget(String(e.target?.value ?? pageTarget))}>
+          <s-select
+            label="Target pages"
+            value={canUsePopupTargetingOnPlan ? pageTarget : "all"}
+            disabled={!canUsePopupTargetingOnPlan}
+            onChange={(e) => setPageTarget(String(e.target?.value ?? pageTarget))}
+          >
             <s-option value="home">Homepage only</s-option>
             <s-option value="all">All pages</s-option>
             <s-option value="exact">Exact URL</s-option>
@@ -1339,6 +1404,7 @@ export default function PopupDesignPage() {
               value={exactPageUrl}
               onChange={(e) => setExactPageUrl(e.currentTarget.value)}
               placeholder="/products/gift-card or full product URL"
+              disabled={!canUsePopupTargetingOnPlan}
             />
           )}
           <s-banner tone="warning" heading="One-time theme setup">
@@ -1364,6 +1430,7 @@ export default function PopupDesignPage() {
               {targetingExplainer.bullets.map((line, i) => <li key={i} style={{ marginBottom: 4 }}>{line}</li>)}
             </ul>
           </s-banner>
+          </div>
         </TabSection>
       </>
     );
@@ -1419,8 +1486,8 @@ export default function PopupDesignPage() {
       <input type="hidden" name="showMode" value={showMode} />
       <input type="hidden" name="repeatFrequencyMinutes" value={String(repeatFrequencyMinutes)} />
       <input type="hidden" name="maxImpressions" value={String(maxImpressions)} />
-      <input type="hidden" name="pageTarget" value={pageTarget} />
-      <input type="hidden" name="exactPageUrl" value={exactPageUrl} />
+      <input type="hidden" name="pageTarget" value={canUsePopupTargetingOnPlan ? pageTarget : "all"} />
+      <input type="hidden" name="exactPageUrl" value={canUsePopupTargetingOnPlan ? exactPageUrl : ""} />
       <input type="hidden" name="leftImageUrl" value={leftImageUrl} />
       <input type="hidden" name="leftImageAlt" value={leftImageAlt} />
       <input type="hidden" name="copyCouponButtonText" value={copyCouponButtonText} />
@@ -1516,8 +1583,17 @@ export default function PopupDesignPage() {
             <div style={{ marginBottom: 16 }}>
               <s-banner tone="info" heading="Storefront delivery">
                 Enable <strong>Geekify storefront</strong> once under Theme → App embeds. Then use{" "}
-                <strong>Target pages</strong> (All pages, Homepage only, or Exact URL) and <strong>Display</strong> per popup -
-                no manual block placement on each template.
+                {canUsePopupTargetingOnPlan ? (
+                  <>
+                    <strong>Target pages</strong> (All pages, Homepage only, or Exact URL) and <strong>Display</strong> per popup -
+                    no manual block placement on each template.
+                  </>
+                ) : (
+                  <>
+                    <strong>Display</strong> per popup with <strong>All pages</strong> targeting on the Free plan.{" "}
+                    <s-link href={billingUpgradeHref}>Upgrade to Pro</s-link> for Homepage only or Exact URL targeting.
+                  </>
+                )}
                 {popupEmbedEditorUrl ? (
                   <>
                     {" "}
@@ -1667,13 +1743,21 @@ export default function PopupDesignPage() {
                                     const useEditor = p.id === selectedPopupId;
                                     fd.set(
                                       "pageTarget",
-                                      useEditor ? pageTarget : String(p.config?.pageTarget || "all"),
+                                      canUsePopupTargetingOnPlan
+                                        ? useEditor
+                                          ? pageTarget
+                                          : String(p.config?.pageTarget || "all")
+                                        : "all",
                                     );
                                     fd.set(
                                       "exactPageUrl",
-                                      useEditor
-                                        ? exactPageUrl
-                                        : String(p.config?.exactPageUrl || p.config?.customPathContains || ""),
+                                      canUsePopupTargetingOnPlan
+                                        ? useEditor
+                                          ? exactPageUrl
+                                          : String(
+                                              p.config?.exactPageUrl || p.config?.customPathContains || "",
+                                            )
+                                        : "",
                                     );
                                   }
                                   fetcher.submit(fd, { method: "post" });
@@ -1920,7 +2004,10 @@ export default function PopupDesignPage() {
                 {/* Tab bar */}
                 <div style={{ display: "flex", borderBottom: "1px solid #e4e8f0", background: "#f8fafc", overflowX: "auto" }}>
                   {EDITOR_TABS.map((tab) => (
-                    <button key={tab.id} type="button" className={`editor-tab${editorTab === tab.id ? " active" : ""}`}
+                    <button
+                      key={tab.id}
+                      type="button"
+                      className={`editor-tab${editorTab === tab.id ? " active" : ""}`}
                       onClick={() => setEditorTab(tab.id)}
                       style={{ flex: "1 1 0", border: "none", borderBottom: "2px solid transparent", padding: "13px 8px 11px", fontSize: 12, fontWeight: 600, color: "#8896a8", cursor: "pointer", background: "#f8fafc", whiteSpace: "nowrap", display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
                       <s-icon type={tab.icon} size="small" />

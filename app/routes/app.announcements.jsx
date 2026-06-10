@@ -14,6 +14,7 @@ import { authenticate } from "../shopify.server";
 import {
   loadShopBillingContext,
   rejectIfAnnouncementCreateBlocked,
+  rejectIfAppLocked,
   rejectIfDeleteNotAllowed,
 } from "../lib/app-billing.server.js";
 import {
@@ -106,6 +107,8 @@ export const action = async ({ request }) => {
   const { session, billing } = await authenticate.admin(request);
   const shop = session.shop;
   const billingPlan = await loadShopBillingContext(billing, shop);
+  const appLockErr = rejectIfAppLocked(billingPlan);
+  if (appLockErr) return appLockErr;
   const form = await request.formData();
 
   const limitErr = await rejectIfAnnouncementCreateBlocked(

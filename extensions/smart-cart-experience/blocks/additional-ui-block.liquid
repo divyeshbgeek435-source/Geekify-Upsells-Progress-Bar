@@ -12,7 +12,19 @@
 
 {{ 'additional-ui.css' | asset_url | stylesheet_tag }}
 
-<script
+{% liquid
+  assign sce_storefront_config = shop.metafields['$app:storefront_config'].value
+  if sce_storefront_config == blank
+    assign sce_storefront_config = shop.metafields.app.storefront_config.value
+  endif
+  assign sce_storefront_locked = false
+  if sce_storefront_config.storefrontEnabled == false
+    assign sce_storefront_locked = true
+  endif
+%}
+<script src="{{ 'sce-storefront-access.js' | asset_url }}" defer></script>
+{% unless sce_storefront_locked %}
+  <script
   src="{{ 'additional-ui.js' | asset_url }}"
   data-sce-extra=""
   data-sce-extra-block-id="{{ block.id }}"
@@ -22,6 +34,7 @@
   data-api-url="{{ shop.secure_url }}/apps/sce/additional-ui"
   defer
 ></script>
+{% endunless %}
 
 {% schema %}
 {

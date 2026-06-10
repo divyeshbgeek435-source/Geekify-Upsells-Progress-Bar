@@ -1,6 +1,7 @@
 import prisma from "../db.server";
 import { authenticateAppProxyRequest } from "../lib/app-proxy.server.js";
 import { buildStorefrontCartAccessPayload } from "../lib/storefront-cart-access-payload.server.js";
+import { storefrontDisabledProxyResponse } from "../lib/storefront-access.server.js";
 
 const lastPingLogAtByShop = new Map();
 
@@ -13,6 +14,9 @@ const lastPingLogAtByShop = new Map();
 export const loader = async ({ request }) => {
   const { shop, errorResponse } = await authenticateAppProxyRequest(request);
   if (errorResponse) return errorResponse;
+
+  const disabled = await storefrontDisabledProxyResponse(shop);
+  if (disabled) return disabled;
 
   const url = new URL(request.url);
   const subtotalMinor = Number(url.searchParams.get("subtotalCents") || 0);
@@ -40,6 +44,9 @@ export const loader = async ({ request }) => {
 export const action = async ({ request }) => {
   const { session, shop, errorResponse } = await authenticateAppProxyRequest(request);
   if (errorResponse) return errorResponse;
+
+  const disabled = await storefrontDisabledProxyResponse(shop);
+  if (disabled) return disabled;
 
   let payload = {};
   try {

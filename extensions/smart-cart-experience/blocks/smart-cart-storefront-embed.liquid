@@ -20,6 +20,10 @@
   if sce_storefront_config == blank
     assign sce_storefront_config = shop.metafields.app.storefront_config.value
   endif
+  assign sce_storefront_locked = false
+  if sce_storefront_config.storefrontEnabled == false
+    assign sce_storefront_locked = true
+  endif
 %}
 {% if sce_storefront_config != blank %}
   <script id="sce-inline-storefront-config" type="application/json">
@@ -29,6 +33,9 @@
   <!-- SCE: no storefront_config on {{ shop.permanent_domain }} - open Geekify app admin on this store, then refresh -->
 {% endif %}
 
+<script src="{{ 'sce-storefront-access.js' | asset_url }}" defer></script>
+
+{% unless sce_storefront_locked %}
 <script
   src="{{ 'announcement-bar.js' | asset_url }}"
   data-sce-announcement=""
@@ -87,6 +94,7 @@
   data-api-url="/apps/sce/popup-design"
   defer
 ></script>
+{% endunless %}
 
 {% schema %}
 {

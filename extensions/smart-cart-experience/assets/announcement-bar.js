@@ -12,6 +12,7 @@
     }
   }
   if (!script || !script.dataset) return;
+  if (window.__sceStorefrontDisabled) return;
   script.setAttribute("data-sce-ab-ran", "1");
 
   function normalizeThemeSectionId(raw) {
@@ -708,6 +709,10 @@
           return;
         }
         var data = wrapped.data;
+        if (window.SCE && window.SCE.guardStorefrontFromPayload(data)) {
+          hideAnnouncement();
+          return;
+        }
         if (!shouldRenderAnnouncement(data)) {
           hideAnnouncement();
           var errCode = String(data.error || "");

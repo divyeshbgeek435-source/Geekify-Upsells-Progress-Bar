@@ -6,6 +6,7 @@ import {
 import { authenticateAppProxyRequest, prismaShopInClause } from "../lib/app-proxy.server.js";
 import { templateRenderPayload } from "../lib/additional-ui-template.js";
 import prisma from "../db.server";
+import { storefrontDisabledProxyResponse } from "../lib/storefront-access.server.js";
 
 export const loader = async ({ request }) => {
   const { shop, errorResponse } = await authenticateAppProxyRequest(request);
@@ -14,6 +15,10 @@ export const loader = async ({ request }) => {
   if (!shopWhere) {
     return Response.json({ ok: false, error: "missing_shop" }, { status: 400 });
   }
+
+  const disabled = await storefrontDisabledProxyResponse(shop);
+  if (disabled) return disabled;
+
   const url = new URL(request.url);
   const sectionId = String(url.searchParams.get("sectionId") || "").trim().toLowerCase();
 

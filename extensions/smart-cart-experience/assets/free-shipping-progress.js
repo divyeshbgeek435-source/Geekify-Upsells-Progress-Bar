@@ -12,6 +12,7 @@
     }
   }
   if (!script || !script.dataset) return;
+  if (window.__sceStorefrontDisabled) return;
   script.setAttribute("data-sce-fs-ran", "1");
   var rawInstanceKey =
     (script.dataset.instanceId ||
@@ -109,7 +110,7 @@
       return {
         barFill: "",
         barTrack: "",
-        badgeBackgroundColor: "#ffffff",
+        badgeBackgroundColor: "#c3bbbb",
         badgeBorderColor: "#000000",
         badgeShadow: "0 0 0 2px #ffffff, 0 2px 10px rgba(0,0,0,0.08)",
         iconColor: "#000000",
@@ -353,6 +354,15 @@
 
   function applyCartAccessPayload(data, cart) {
     if (!data || !data.ok) return false;
+    if (window.SCE && typeof window.SCE.guardStorefrontFromPayload === "function") {
+      if (window.SCE.guardStorefrontFromPayload(data)) return false;
+    } else if (data.storefrontEnabled === false) {
+      if (typeof window.SCE !== "undefined" && window.SCE.shutdownStorefrontUi) {
+        window.SCE.shutdownStorefrontUi();
+      }
+      window.__sceStorefrontDisabled = true;
+      return false;
+    }
     if (data.sequentialMsg0) sequentialMsg0 = String(data.sequentialMsg0);
     if (data.sequentialMsg1) sequentialMsg1 = String(data.sequentialMsg1);
     if (data.sequentialMsg2) sequentialMsg2 = String(data.sequentialMsg2);
@@ -432,8 +442,12 @@
 
   var bootInlineConfig = readInlineStorefrontConfig();
   if (bootInlineConfig) {
+    if (window.SCE && window.SCE.guardStorefrontFromPayload(bootInlineConfig)) {
+      return;
+    }
     hasInlineStorefrontConfig = applyCartAccessPayload(bootInlineConfig, null);
     cartAccessProxyFailed = false;
+    if (window.__sceStorefrontDisabled) return;
   }
 
   function alternateShortCartAccessPath(primaryBase) {
@@ -1429,7 +1443,7 @@
       if (!el) return;
       el.style.width = badgeSize + "px";
       el.style.height = badgeSize + "px";
-      el.style.background = phase.badgeBackgroundColor || "#ffffff";
+      el.style.background = phase.badgeBackgroundColor || "#c3bbbb";
       el.style.color = phase.iconColor || "#000000";
       el.style.border = "none";
       el.style.boxShadow = phase.badgeShadow || "none";

@@ -131,7 +131,7 @@ export function DiscAdvancedLiveWidget({
   const badgeStyle = (phase) => ({
     width: badgeSize,
     height: badgeSize,
-    background: phase?.badgeBackgroundColor || "#ffffff",
+    background: phase?.badgeBackgroundColor || "#c3bbbb",
     color: phase?.iconColor || "#000000",
     border: "none",
     boxShadow: phase?.badgeShadow || "none",

@@ -17,6 +17,7 @@
 
   var script = findPopupScript();
   if (!script || !script.dataset) return;
+  if (window.__sceStorefrontDisabled) return;
   var dedupeId = String(script.dataset.scePopupDesignId || "").trim();
   var dedupeKey = "__scePopupSingleton_" + (dedupeId || "default");
   try {
@@ -1376,6 +1377,15 @@
     fetchPopupConfig(0, urls)
       .then(function (wrapped) {
         var fetchUrl = wrapped && wrapped.fetchUrl ? wrapped.fetchUrl : primaryFetchUrl;
+        if (
+          wrapped &&
+          wrapped.data &&
+          window.SCE &&
+          window.SCE.guardStorefrontFromPayload(wrapped.data)
+        ) {
+          removePopup();
+          return;
+        }
         if (!wrapped || !wrapped.data || wrapped.data.ok !== true || wrapped.data.active === false) {
           removePopup();
           if (!wrapped || !wrapped.data || wrapped.data.ok !== true) {

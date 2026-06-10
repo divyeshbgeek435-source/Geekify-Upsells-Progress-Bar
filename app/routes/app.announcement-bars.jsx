@@ -25,6 +25,7 @@ import {
 } from "../lib/announcements-admin.server.js";
 import {
   loadShopBillingContext,
+  rejectIfAppLocked,
   rejectIfDeleteNotAllowed,
 } from "../lib/app-billing.server.js";
 import {
@@ -542,13 +543,13 @@ function AnnouncementCreateModal({
                 autocomplete="off"
                 required
               />
-              <s-text-field
+              {/* <s-text-field
                 label="Section HTML ID"
                 value={sectionHtmlId}
                 details="Auto-generated ID (read-only)."
                 autocomplete="off"
                 readonly
-              />
+              /> */}
 
               {activeTab === "messages" ? (
                 <>
@@ -1406,6 +1407,8 @@ export const loader = async ({ request }) => {
 export const action = async ({ request }) => {
   const { session, billing } = await authenticate.admin(request);
   const billingPlan = await loadShopBillingContext(billing, session.shop);
+  const appLockErr = rejectIfAppLocked(billingPlan);
+  if (appLockErr) return appLockErr;
   const form = await request.formData();
   if (String(form.get("intent") || "") === "delete") {
     const deleteBlock = rejectIfDeleteNotAllowed(billingPlan.planId);

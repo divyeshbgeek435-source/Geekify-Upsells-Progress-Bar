@@ -4,10 +4,22 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { getShopifyAppClientId } from "../lib/shopify-config.server";
 import { authenticate } from "../shopify.server";
-import { loadShopBillingContext } from "../lib/app-billing.server.js";
+import {
+  acknowledgePremiumTrialExpiryFreePlan,
+  billingReturnUrl,
+  billingUsesTestMode,
+  loadShopBillingContext,
+} from "../lib/app-billing.server.js";
+import { PREMIUM_PLAN_BILLING_KEY } from "../lib/app-plans.shared.js";
+import { syncStorefrontConfigToShopMetafield } from "../lib/storefront-config-sync.server.js";
 import { dismissPlanDowngradeNotice } from "../lib/plan-limit-enforcement.server.js";
 import { PlanGatedDeleteNavBridge } from "../components/plan-gated-delete.jsx";
 import { PlanDowngradeNoticeModal } from "../components/plan-downgrade-notice.jsx";
+import {
+  AppTrialLockOverlay,
+  PremiumTrialLockModal,
+} from "../components/app-trial-lock.jsx";
+import { guardAppAdminMutation } from "../lib/guard-app-access.server.js";
 import { PlanLockedGlobalStyles } from "../components/plan-locked-visual.jsx";
 import { EmailIcon } from "@shopify/polaris-icons";
 
@@ -39,9 +51,49 @@ const ADDITIONAL_UI_BLOCK_HANDLE = "additional-ui-block";
 const ANNOUNCEMENT_BAR_BLOCK_HANDLE = "announcement-bar-block";
 
 export const action = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
   const form = await request.formData();
-  if (String(form.get("intent") || "") === "dismiss-plan-downgrade-notice") {
+  const intent = String(form.get("intent") || "");
+
+  if (intent === "choose-free-plan" || intent === "subscribe") {
+    const guard = await guardAppAdminMutation(request, {
+      allowWhenLocked: true,
+    });
+    if (guard.blocked) return guard.response;
+    const { session, billing, billingPlan, admin } = guard;
+
+    if (intent === "choose-free-plan") {
+      if (!billingPlan.isAppLocked) {
+        return { ok: false, error: "No plan choice is required right now." };
+      }
+      const result = await acknowledgePremiumTrialExpiryFreePlan(session.shop);
+      if (!result.ok) {
+        return { ok: false, error: result.error };
+      }
+      try {
+        await syncStorefrontConfigToShopMetafield(admin, session.shop);
+      } catch (e) {
+        console.warn("[app] storefront unlock metafield sync failed", e?.message);
+      }
+      return {
+        ok: true,
+        intent: "choose-free-plan",
+        message: "You are now on the Free plan. Premium trial features above Free limits are no longer available.",
+      };
+    }
+
+    if (intent === "subscribe") {
+      return billing.request({
+        plan: PREMIUM_PLAN_BILLING_KEY,
+        isTest: billingUsesTestMode(),
+        returnUrl: billingReturnUrl(request),
+      });
+    }
+  }
+
+  const guard = await guardAppAdminMutation(request);
+  if (guard.blocked) return guard.response;
+  const { session } = guard;
+  if (intent === "dismiss-plan-downgrade-notice") {
     await dismissPlanDowngradeNotice(session.shop);
     return { ok: true, intent: "dismiss-plan-downgrade-notice" };
   }
@@ -49,9 +101,16 @@ export const action = async ({ request }) => {
 };
 
 export const loader = async ({ request }) => {
-  const { session, billing } = await authenticate.admin(request);
+  const { session, billing, admin } = await authenticate.admin(request);
   const shop = session.shop;
   const billingPlan = await loadShopBillingContext(billing, shop);
+  if (billingPlan.isAppLocked) {
+    try {
+      await syncStorefrontConfigToShopMetafield(admin, shop);
+    } catch (e) {
+      console.warn("[app] storefront lock metafield sync failed", e?.message);
+    }
+  }
   const storeHandle = shop.replace(/\.myshopify\.com$/i, "");
 
   const clientId = getShopifyAppClientId();
@@ -113,6 +172,8 @@ export default function App() {
   const [downgradeNoticeDismissed, setDowngradeNoticeDismissed] = useState(false);
   const showPlanDowngradeNotice =
     Boolean(billingPlan?.showPlanDowngradeNotice) && !downgradeNoticeDismissed;
+  const isAppLocked = Boolean(billingPlan?.isAppLocked);
+  const onBillingPage = location.pathname.includes("/app/billing");
 
   const withShopifyParams = (path) => {
     const [pathname, existingQuery = ""] = path.split("?");
@@ -134,27 +195,50 @@ export default function App() {
         open={showPlanDowngradeNotice}
         onDismiss={() => setDowngradeNoticeDismissed(true)}
       />
-      <s-app-nav> 
-      <s-link href={withShopifyParams("/app/discounts")}>Discounts</s-link>
-      <s-link href={withShopifyParams("/app/popup-design")}>Popup</s-link> 
-      <s-link href={withShopifyParams("/app/announcements")}>Announcements</s-link>
-      <s-link href={withShopifyParams("/app/billing")}>Pricing</s-link>
+      <AppTrialLockOverlay locked={isAppLocked && !onBillingPage} />
+      <PremiumTrialLockModal
+        locked={isAppLocked}
+        formAction="/app"
+        billingPath="/app/billing"
+      />
+      <s-app-nav>
+        {isAppLocked ? (
+          <s-link href={withShopifyParams("/app/billing")}>Pricing — choose a plan</s-link>
+        ) : (
+          <>
+            <s-link href={withShopifyParams("/app/discounts")}>Discounts</s-link>
+            <s-link href={withShopifyParams("/app/popup-design")}>Popup</s-link>
+            <s-link href={withShopifyParams("/app/announcements")}>Announcements</s-link>
+            <s-link href={withShopifyParams("/app/billing")}>Pricing</s-link>
+          </>
+        )}
       </s-app-nav>
-      <Outlet context={{ onboarding, billingPlan }} />
-      <button
-        type="button"
-        aria-label="Get Support"
-        onClick={() => {
-          window.open(
-            `mailto:${SUPPORT_EMAIL}?subject=Get Support`,
-            "_blank",
-          );
-        }}
-        style={SUPPORT_BUTTON_STYLE}
+      <div
+        style={
+          isAppLocked && !onBillingPage
+            ? { pointerEvents: "none", opacity: 0.45, userSelect: "none" }
+            : undefined
+        }
+        aria-hidden={isAppLocked && !onBillingPage ? true : undefined}
       >
-        <EmailIcon width={20} height={20} aria-hidden style={{ fill: "rgb(0 123 96)" }} />
-        <span>Get Support</span>
-      </button>
+        <Outlet context={{ onboarding, billingPlan }} />
+      </div>
+      {!isAppLocked ? (
+        <button
+          type="button"
+          aria-label="Get Support"
+          onClick={() => {
+            window.open(
+              `mailto:${SUPPORT_EMAIL}?subject=Get Support`,
+              "_blank",
+            );
+          }}
+          style={SUPPORT_BUTTON_STYLE}
+        >
+          <EmailIcon width={20} height={20} aria-hidden style={{ fill: "rgb(0 123 96)" }} />
+          <span>Get Support</span>
+        </button>
+      ) : null}
     </AppProvider>
   );
 }

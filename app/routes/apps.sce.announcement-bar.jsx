@@ -6,6 +6,7 @@ import {
   authenticateAppProxyRequest,
 } from "../lib/app-proxy.server.js";
 import { templateRenderPayload } from "../lib/announcement-header-template.js";
+import { storefrontDisabledProxyResponse } from "../lib/storefront-access.server.js";
 
 /**
  * App proxy: GET https://{shop}/apps/sce/announcement-bar?sectionId={sectionId}
@@ -22,6 +23,9 @@ export const loader = async ({ request }) => {
   if (!shop) {
     return Response.json({ ok: false, error: "missing_shop" }, { status: 400 });
   }
+
+  const disabled = await storefrontDisabledProxyResponse(shop);
+  if (disabled) return disabled;
 
   const resolved = await resolveHeaderAnnouncementForStorefront(shop, sectionId);
   if (!resolved.ok) {

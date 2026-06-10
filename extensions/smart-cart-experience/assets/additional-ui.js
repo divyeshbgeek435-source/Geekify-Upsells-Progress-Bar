@@ -11,6 +11,7 @@
     }
   }
   if (!script || !script.dataset) return;
+  if (window.__sceStorefrontDisabled) return;
   script.setAttribute("data-sce-extra-ran", "1");
 
   var hookId = String(script.dataset.sceExtraHook || "").trim();
@@ -252,11 +253,15 @@
         });
       })
       .then(function (wrapped) {
-        if (!shouldRenderBodyAnnouncement(wrapped && wrapped.data)) {
+        var data = wrapped && wrapped.data;
+        if (window.SCE && window.SCE.guardStorefrontFromPayload(data)) {
           hideBar();
           return;
         }
-        var data = wrapped.data;
+        if (!shouldRenderBodyAnnouncement(data)) {
+          hideBar();
+          return;
+        }
         var nextVersion = String(data.version || "");
         if (nextVersion && nextVersion === lastRenderVersion) return;
         render(data.config || {});

@@ -8,6 +8,7 @@ import {
 } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
+import { PREMIUM_PLAN_PRICE_USD } from "../lib/app-plans.shared.js";
 import { loadShopBillingContext } from "../lib/app-billing.server.js";
 import { syncStorefrontConfigToShopMetafield } from "../lib/storefront-config-sync.server.js";
 import prisma from "../db.server";
@@ -1135,21 +1136,54 @@ export default function AppIndexTierStatus() {
   const primaryActiveDiscount = activeDiscountGroups[0] || null;
   const hasMultipleActiveDiscounts = activeDiscountGroups.length > 1;
 
+  const [planBannerVisible, setPlanBannerVisible] = useState(Boolean(billingPlan));
+
+  useEffect(() => {
+    if (!billingPlan) {
+      setPlanBannerVisible(false);
+      return undefined;
+    }
+    if (billingPlan.isAppLocked) {
+      setPlanBannerVisible(true);
+      return undefined;
+    }
+    setPlanBannerVisible(true);
+    const timer = window.setTimeout(() => setPlanBannerVisible(false), 5000);
+    return () => window.clearTimeout(timer);
+  }, [
+    billingPlan,
+    billingPlan?.isAppLocked,
+    billingPlan?.hasActivePayment,
+    billingPlan?.planId,
+    billingPlan?.premiumTrial?.trialActive,
+    billingPlan?.premiumTrial?.trialDaysRemaining,
+  ]);
+
   return (
     <s-page heading="Geekify: Upsells, Progress Bar">
       <style>{tierStatusCss}</style>
       <style>{setupGuideCss}</style>
 
-      {billingPlan ? (
+      {billingPlan && planBannerVisible ? (
         <s-banner tone={billingPlan.isPremium ? "success" : "info"} heading="Your plan">
-          {billingPlan.isPremium
-            ? `You are on ${billingPlan.planName} ($5/month). Thank you for subscribing.`
-            : (
+          {billingPlan.isAppLocked
+            ? (
                 <>
-                  You are on the {billingPlan.planName} plan.{" "}
-                  <s-link href={withShopifyParams("/app/billing")}>Upgrade to Premium</s-link>
+                  Your Premium trial has ended. Choose the Free plan or upgrade to Premium in the
+                  dialog, or on the{" "}
+                  <s-link href={withShopifyParams("/app/billing")}>Pricing</s-link> page.
                 </>
-              )}
+              )
+            : billingPlan.premiumTrial?.trialActive
+              ? `Premium free trial — ${billingPlan.premiumTrial.trialDaysRemaining ?? ""} day(s) remaining.`
+              : billingPlan.hasActivePayment
+                ? `You are on ${billingPlan.planName} ($${PREMIUM_PLAN_PRICE_USD}/month). Thank you for subscribing.`
+                : (
+                    <>
+                      You are on the {billingPlan.planName} plan.{" "}
+                      <s-link href={withShopifyParams("/app/billing")}>View plans</s-link>
+                    </>
+                  )}
         </s-banner>
       ) : null}
 

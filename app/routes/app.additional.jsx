@@ -31,6 +31,7 @@ import {
 import { authenticate } from "../shopify.server";
 import {
   loadShopBillingContext,
+  rejectIfAppLocked,
   rejectIfDeleteNotAllowed,
 } from "../lib/app-billing.server.js";
 import {
@@ -175,6 +176,8 @@ export const loader = async ({ request }) => {
 export const action = async ({ request }) => {
   const { session, billing } = await authenticate.admin(request);
   const billingPlan = await loadShopBillingContext(billing, session.shop);
+  const appLockErr = rejectIfAppLocked(billingPlan);
+  if (appLockErr) return appLockErr;
   const form = await request.formData();
   if (String(form.get("intent") || "") === "delete") {
     const deleteBlock = rejectIfDeleteNotAllowed(billingPlan.planId);

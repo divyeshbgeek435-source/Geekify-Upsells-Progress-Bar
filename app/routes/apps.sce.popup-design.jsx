@@ -13,6 +13,7 @@ import {
   selectBestActivePopupRow,
 } from "../lib/popup-page-target.shared.js";
 import prisma from "../db.server";
+import { storefrontDisabledProxyResponse } from "../lib/storefront-access.server.js";
 
 const BAR_TYPE = "popup_design";
 
@@ -170,6 +171,9 @@ export const loader = async ({ request }) => {
   if (!shopWhere) {
     return noStoreJson({ ok: false, error: "missing_shop" }, 400);
   }
+
+  const disabled = await storefrontDisabledProxyResponse(shop);
+  if (disabled) return disabled;
 
   const requestedDesignId = (
     url.searchParams.get("popup_design_id") ||
@@ -377,6 +381,12 @@ export const action = async ({ request }) => {
   const shopWhere = prismaShopInClause(shop);
   if (!shopWhere) {
     return jsonNoStore({ ok: false, error: "missing_shop" }, 400);
+  }
+
+  const disabled = await storefrontDisabledProxyResponse(shop);
+  if (disabled) {
+    const body = await disabled.json();
+    return jsonNoStore(body, 200);
   }
 
   let payload;

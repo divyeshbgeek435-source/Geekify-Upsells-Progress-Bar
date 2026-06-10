@@ -14,6 +14,7 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import {
   loadShopBillingContext,
+  rejectIfAppLocked,
   rejectIfDeleteNotAllowed,
   rejectIfDiscountLimitReached,
 } from "../lib/app-billing.server.js";
@@ -26,7 +27,11 @@ import {
   planLockedRowClassName,
   PLAN_LOCKED_PANEL_CLASS,
 } from "../components/plan-locked-visual.jsx";
-import { PREMIUM_PLAN_PRICE_USD } from "../lib/app-plans.shared.js";
+import {
+  canScheduleDiscounts,
+  FREE_PLAN_DISCOUNT_SCHEDULING_NOTE,
+  PREMIUM_PLAN_PRICE_USD,
+} from "../lib/app-plans.shared.js";
 import { saveFreePlanWidgetSettings } from "../lib/widget-plan-access.server.js";
 import prisma from "../db.server";
 import {
@@ -1084,6 +1089,8 @@ export const loader = async ({ request }) => {
 export const action = async ({ request }) => {
   const { admin, session, billing } = await authenticate.admin(request);
   const billingPlan = await loadShopBillingContext(billing, session.shop);
+  const appLockErr = rejectIfAppLocked(billingPlan);
+  if (appLockErr) return appLockErr;
   const formData = await request.formData();
   const intent = String(formData.get("intent") || "");
   const id = String(formData.get("id") || "");
@@ -1282,6 +1289,13 @@ export const action = async ({ request }) => {
         ? discountScheduleEndAt.toISOString()
         : "";
     }
+    const scheduleAllowed = canScheduleDiscounts(billingPlan.planId);
+    if (!scheduleAllowed && !scheduleLock.locked) {
+      discountScheduleStartAtRaw = "";
+      discountScheduleEndAtRaw = "";
+      discountScheduleStartAt = null;
+      discountScheduleEndAt = null;
+    }
     const discountErrors = {};
     if (!discountName) discountErrors.discountName = "Discount name is required";
     if (!scheduleLock.locked) {
@@ -1308,6 +1322,32 @@ export const action = async ({ request }) => {
     }
     if (Object.keys(discountErrors).length) return { ok: false, errors: discountErrors };
 
+    let existingDiscountNames = [];
+    if (typeof prisma.tierDiscount?.findMany === "function") {
+      try {
+        const rows = await prisma.tierDiscount.findMany({
+          where: { shop: session.shop },
+          select: { name: true },
+        });
+        existingDiscountNames = rows
+          .map((row) => String(row.name || "").trim())
+          .filter(Boolean);
+      } catch (error) {
+        if (!isMissingTableError(error, "TierDiscount")) throw error;
+      }
+    }
+    const lookupName = String(originalDiscountName || discountName || "").trim();
+    const isExistingDiscount = Boolean(lookupName && existingDiscountNames.includes(lookupName));
+    const isNewDiscount =
+      !isExistingDiscount && !existingDiscountNames.includes(discountName);
+    if (isNewDiscount) {
+      const discountLimitErr = await rejectIfDiscountLimitReached(
+        session.shop,
+        billingPlan.planId,
+      );
+      if (discountLimitErr) return discountLimitErr;
+    }
+
     const startScheduleValid =
       Boolean(discountScheduleStartAtRaw) &&
       discountScheduleStartAt &&
@@ -1317,7 +1357,11 @@ export const action = async ({ request }) => {
       discountScheduleEndAt &&
       !Number.isNaN(discountScheduleEndAt.getTime());
     const hasDiscountSchedule = startScheduleValid || endScheduleValid;
-    const discountActive = hasDiscountSchedule ? true : formData.has("discountActive");
+    const discountActive = scheduleAllowed
+      ? hasDiscountSchedule
+        ? true
+        : formData.has("discountActive")
+      : true;
     if (discountActive) {
       const candidateName = String(originalDiscountName || discountName || "").trim();
       const existingWindows = await listExistingDiscountWindows();
@@ -2463,6 +2507,14 @@ function DiscountStorefrontToggle({ active, onChange, disabled }) {
   );
 }
 
+function FreePlanSchedulingNote({ style }) {
+  return (
+    <div className="disc-info-box" style={style}>
+      <strong>Note:</strong> {FREE_PLAN_DISCOUNT_SCHEDULING_NOTE}
+    </div>
+  );
+}
+
 function DiscountOverviewRow({
   group,
   totalDiscountUsageCount,
@@ -2474,6 +2526,7 @@ function DiscountOverviewRow({
   upgradeHref,
   isPlanLocked = false,
   planLockedMessage = PLAN_LOCKED_ITEM_MESSAGE,
+  showScheduleColumn = true,
 }) {
   const storefrontActive =
     suppressStorefrontActive ? false : group.discountActive !== false;
@@ -2515,11 +2568,13 @@ function DiscountOverviewRow({
       {/* <td className="disc-overview-tracked">
         {Math.max(Number(group.usageSum ?? 0), Number(totalDiscountUsageCount ?? 0))}
       </td> */}
-      <td className="disc-overview-schedule">
-        <span className={discountScheduleDisplay(group) === "Always On" ? "disc-overview-always-on" : undefined}>
-          {discountScheduleDisplay(group)}
-        </span>
-      </td>
+      {showScheduleColumn ? (
+        <td className="disc-overview-schedule">
+          <span className={discountScheduleDisplay(group) === "Always On" ? "disc-overview-always-on" : undefined}>
+            {discountScheduleDisplay(group)}
+          </span>
+        </td>
+      ) : null}
       <td>
         <div className="disc-overview-actions">
           <s-button
@@ -2563,6 +2618,7 @@ export default function DiscountsIndex() {
   const { onboarding, billingPlan: outletBillingPlan } = useOutletContext() || {};
   const billingPlan = loaderBillingPlan ?? outletBillingPlan;
   const isPremium = Boolean(billingPlan?.isPremium);
+  const canScheduleDiscountsOnPlan = canScheduleDiscounts(billingPlan?.planId);
   const canDeleteRecords = isPremium;
   const billingUpgradeHref = useBillingUpgradeHref();
   const maxTierDiscounts = billingPlan?.limits?.maxDiscounts ?? null;
@@ -2888,10 +2944,10 @@ export default function DiscountsIndex() {
     () => String(discountEditOriginalName || discountEditName || "").trim(),
     [discountEditOriginalName, discountEditName],
   );
-  const tierModalPlanLocked = useMemo(
-    () => isDiscountPlanLocked(tierModalDiscountKey),
-    [isDiscountPlanLocked, tierModalDiscountKey],
-  );
+  const tierModalPlanLocked = useMemo(() => {
+    if (!tierModalDiscountKey) return false;
+    return isDiscountPlanLocked(tierModalDiscountKey);
+  }, [isDiscountPlanLocked, tierModalDiscountKey]);
   const modalDiscountHasPersisted = useMemo(() => {
     if (!tierModalDiscountKey) return false;
     return groupedTierDiscounts.some((g) => g.discountName === tierModalDiscountKey);
@@ -2990,11 +3046,12 @@ export default function DiscountsIndex() {
   const openCreateTierDiscountModal = useCallback(() => {
     if (tierDiscountLimitReached) return;
     setDiscountEditName(""); setDiscountEditOriginalName("");
-    setDiscountEditActive(false); setDiscountEditStartAt(""); setDiscountEditEndAt("");
+    setDiscountEditActive(!canScheduleDiscountsOnPlan);
+    setDiscountEditStartAt(""); setDiscountEditEndAt("");
     setTierEditId(""); setTierFormInModalOpen(false); setTierDiscountModalStep(1);
     setTierName(""); setTierMinSubtotal(""); setTierRewardType("FREE_SHIPPING");
     setTierDiscountPercent(""); setTierMessage(""); setShowTierDiscountModal(true);
-  }, [tierDiscountLimitReached]);
+  }, [tierDiscountLimitReached, canScheduleDiscountsOnPlan]);
 
   const submitDiscountActiveToggle = useCallback(
     (discountName, nextActive) => {
@@ -3393,7 +3450,7 @@ export default function DiscountsIndex() {
     const conflictMessage = actionData?.errors?.discountScheduleConflict;
     if (!conflictMessage) return;
     setShowScheduleConfirmModal(false);
-    setDiscountEditActive(false);
+    setDiscountEditActive(!canScheduleDiscountsOnPlan);
     if (!persistedScheduleLocked) {
       setDiscountEditStartAt("");
       setDiscountEditEndAt("");
@@ -3401,7 +3458,7 @@ export default function DiscountsIndex() {
     setNoticeTitle("Schedule conflict");
     setNoticeMessage(String(conflictMessage));
     setShowNoticeModal(true);
-  }, [actionData, persistedScheduleLocked, showTierDiscountModal]);
+  }, [actionData, persistedScheduleLocked, showTierDiscountModal, canScheduleDiscountsOnPlan]);
 
   useEffect(() => {
     if (!actionData?.ok || actionData.tierIntent !== "discount-toggle-active") return;
@@ -3413,11 +3470,11 @@ export default function DiscountsIndex() {
     const toggleError =
       actionData?.errors?.discountActive || actionData?.errors?.discountName;
     if (!toggleError) return;
-    if (showTierDiscountModal) setDiscountEditActive(false);
+    if (showTierDiscountModal) setDiscountEditActive(!canScheduleDiscountsOnPlan);
     setNoticeTitle("Could not update discount");
     setNoticeMessage(String(toggleError));
     setShowNoticeModal(true);
-  }, [actionData, showTierDiscountModal]);
+  }, [actionData, showTierDiscountModal, canScheduleDiscountsOnPlan]);
 
   useEffect(() => {
     if (!functionOptions.length) return;
@@ -3470,13 +3527,28 @@ export default function DiscountsIndex() {
       fd.set("intent", "discount-upsert");
       fd.set("originalDiscountName", discountEditOriginalName);
       fd.set("discountName", discountEditName);
-      if (!setupHasDiscountSchedule && discountEditActive) fd.set("discountActive", "on");
-      fd.set("discountScheduleStartAt", discountEditStartAt);
-      fd.set("discountScheduleEndAt", discountEditEndAt);
+      if (!canScheduleDiscountsOnPlan) {
+        fd.set("discountActive", "on");
+        fd.set("discountScheduleStartAt", "");
+        fd.set("discountScheduleEndAt", "");
+      } else {
+        if (!setupHasDiscountSchedule && discountEditActive) fd.set("discountActive", "on");
+        fd.set("discountScheduleStartAt", discountEditStartAt);
+        fd.set("discountScheduleEndAt", discountEditEndAt);
+      }
       setPendingTierDiscountStep(nextStep);
       submit(fd, { method: "post" });
     },
-    [discountEditOriginalName, discountEditName, setupHasDiscountSchedule, discountEditActive, discountEditStartAt, discountEditEndAt, submit],
+    [
+      discountEditOriginalName,
+      discountEditName,
+      canScheduleDiscountsOnPlan,
+      setupHasDiscountSchedule,
+      discountEditActive,
+      discountEditStartAt,
+      discountEditEndAt,
+      submit,
+    ],
   );
 
   const handleFinalDiscountSetupSave = useCallback(() => {
@@ -4988,9 +5060,13 @@ export default function DiscountsIndex() {
                 <div style={{ fontSize: 13, color: "#374151", fontStyle: "italic" }}>"{selectedTierDetails.message}"</div>
               </div>
             )}
-            <div style={{ marginTop: 12 }} className="disc-info-box">
-              ℹ️ Timing follows the discount-level schedule configured in the "Schedule & save" section of the setup modal.
-            </div>
+            {canScheduleDiscountsOnPlan ? (
+              <div style={{ marginTop: 12 }} className="disc-info-box">
+                ℹ️ Timing follows the discount-level schedule configured in the "Schedule & save" section of the setup modal.
+              </div>
+            ) : (
+              <FreePlanSchedulingNote style={{ marginTop: 12 }} />
+            )}
           </div>
         </div>
       )}
@@ -5114,11 +5190,12 @@ export default function DiscountsIndex() {
                     <span className="disc-field-error">⚠ {actionData.errors.discountName}</span>
                   )}
                 </div>
-                {!setupHasDiscountSchedule && (
+                {canScheduleDiscountsOnPlan && !setupHasDiscountSchedule && (
                   <label className="disc-checkbox-row">
                     <input
                       type="checkbox"
                       checked={discountEditActive}
+                      disabled={tierModalPlanLocked}
                       onChange={(e) => {
                         const next = e.target.checked;
                         setDiscountEditActive(next);
@@ -5131,6 +5208,9 @@ export default function DiscountsIndex() {
                     <span>Discount enabled immediately</span>
                   </label>
                 )}
+                {!canScheduleDiscountsOnPlan ? (
+                  <FreePlanSchedulingNote />
+                ) : null}
                 {!modalDiscountHasPersisted ? (
                   <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
                     <button
@@ -5141,7 +5221,9 @@ export default function DiscountsIndex() {
                     >
                       Save discount name
                     </button>
-                    <span style={{ fontSize: 12, color: "#6b7280" }}>Save first to unlock tiers &amp; schedule</span>
+                    <span style={{ fontSize: 12, color: "#6b7280" }}>
+                      Save first to unlock tiers{canScheduleDiscountsOnPlan ? " & schedule" : ""}
+                    </span>
                   </div>
                 ) : discountNameIsDuplicate ? (
                   <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "#dc2626", fontWeight: 500 }}>
@@ -5356,7 +5438,9 @@ export default function DiscountsIndex() {
               )}
             </div>
 
-            {sectionsUnlocked && !setupHasDiscountSchedule && discountEditActive && (
+            {sectionsUnlocked &&
+              discountEditActive &&
+              (!canScheduleDiscountsOnPlan || !setupHasDiscountSchedule) && (
               <div style={{ marginBottom: 20 }}>
                 <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
                   <button
@@ -5374,7 +5458,7 @@ export default function DiscountsIndex() {
               </div>
             )}
 
-            {(setupHasDiscountSchedule || !discountEditActive) && (
+            {canScheduleDiscountsOnPlan && (setupHasDiscountSchedule || !discountEditActive) && (
             <div style={{ opacity: sectionsUnlocked ? 1 : 0.5 }}>
               {/* ── Section 3: Schedule & Save ── */}
               <div style={{ fontSize: 14, fontWeight: 700, color: "#111827", marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}>
@@ -5556,14 +5640,14 @@ export default function DiscountsIndex() {
                     {/* <th>Scheduled</th>
                   <th>Expired</th> */}
                     {/* <th>Tracked uses</th> */}
-                    <th>Schedule</th>
+                    {canScheduleDiscountsOnPlan ? <th>Schedule</th> : null}
                     <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {paginatedOverviewDiscounts.length === 0 ? (
                     <tr>
-                      <td colSpan={7} style={{ padding: "18px 16px", textAlign: "center", color: "#6b7280" }}>
+                      <td colSpan={canScheduleDiscountsOnPlan ? 6 : 5} style={{ padding: "18px 16px", textAlign: "center", color: "#6b7280" }}>
                         No discounts match your search.
                       </td>
                     </tr>
@@ -5574,6 +5658,7 @@ export default function DiscountsIndex() {
                       totalDiscountUsageCount={totalDiscountUsageCount}
                       canDelete={canDeleteRecords}
                       upgradeHref={billingUpgradeHref}
+                      showScheduleColumn={canScheduleDiscountsOnPlan}
                       isPlanLocked={isDiscountPlanLocked(group.discountName)}
                       planLockedMessage={PLAN_LOCKED_ITEM_MESSAGE}
                       suppressStorefrontActive={
@@ -5583,9 +5668,24 @@ export default function DiscountsIndex() {
                         if (isDiscountPlanLocked(group.discountName)) return;
                         setDiscountEditName(group.discountName);
                         setDiscountEditOriginalName(group.discountName);
-                        setDiscountEditActive(group.discountActive !== false);
-                        setDiscountEditStartAt(group.discountScheduleStartAt ? isoToLocalDateTimeInput(group.discountScheduleStartAt) : "");
-                        setDiscountEditEndAt(group.discountScheduleEndAt ? isoToLocalDateTimeInput(group.discountScheduleEndAt) : "");
+                        setDiscountEditActive(
+                          canScheduleDiscountsOnPlan ? group.discountActive !== false : true,
+                        );
+                        if (canScheduleDiscountsOnPlan) {
+                          setDiscountEditStartAt(
+                            group.discountScheduleStartAt
+                              ? isoToLocalDateTimeInput(group.discountScheduleStartAt)
+                              : "",
+                          );
+                          setDiscountEditEndAt(
+                            group.discountScheduleEndAt
+                              ? isoToLocalDateTimeInput(group.discountScheduleEndAt)
+                              : "",
+                          );
+                        } else {
+                          setDiscountEditStartAt("");
+                          setDiscountEditEndAt("");
+                        }
                         setTierEditId(""); setTierFormInModalOpen(false); setTierDiscountModalStep(1);
                         setShowTierDiscountModal(true);
                       }}

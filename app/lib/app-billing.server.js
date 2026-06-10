@@ -1,10 +1,14 @@
 import prisma from "../db.server";
 import {
   APP_PLAN_ID,
+  canUsePopupTargeting,
+  FREE_PLAN_POPUP_TARGETING_UPGRADE_MESSAGE,
   PREMIUM_PLAN_BILLING_KEY,
   getPlanLimits,
   planDisplayName,
 } from "./app-plans.shared.js";
+import { parsePopupDesignConfig } from "./popup-design-config.js";
+import { normalizePopupPageTarget } from "./popup-page-target.shared.js";
 import {
   FREE_PLAN_DELETE_BLOCKED_MESSAGE,
   canDeleteOnPlan,
@@ -13,6 +17,14 @@ import {
   loadShopPlanSlots,
   syncShopPlanState,
 } from "./plan-limit-enforcement.server.js";
+import {
+  buildPremiumTrialBillingMeta,
+  clearPremiumTrialOnPaidSubscription,
+  expirePremiumTrialIfNeeded,
+  loadShopPlanStateRow,
+  resolveEffectivePlanId,
+} from "./premium-trial.server.js";
+import { syncShopPremiumSubscriptionFlag } from "./storefront-access.server.js";
 
 /** Use test charges on dev stores unless explicitly disabled. */
 export function billingUsesTestMode() {
@@ -43,7 +55,42 @@ export async function loadShopBillingContext(billing, shop) {
     plans: [PREMIUM_PLAN_BILLING_KEY],
     isTest,
   });
-  const planId = check.hasActivePayment ? APP_PLAN_ID.PREMIUM : APP_PLAN_ID.FREE;
+  const hasActivePayment = check.hasActivePayment;
+  let planState = null;
+  if (shop) {
+    planState = await loadShopPlanStateRow(shop);
+    if (!hasActivePayment) {
+      planState = await expirePremiumTrialIfNeeded(shop, planState);
+    } else {
+      await clearPremiumTrialOnPaidSubscription(shop);
+      planState = await loadShopPlanStateRow(shop);
+    }
+    await syncShopPremiumSubscriptionFlag(shop, hasActivePayment);
+    planState = await loadShopPlanStateRow(shop);
+  }
+
+  const planId = shop
+    ? resolveEffectivePlanId(hasActivePayment, planState)
+    : hasActivePayment
+      ? APP_PLAN_ID.PREMIUM
+      : APP_PLAN_ID.FREE;
+
+  const premiumTrial = shop
+    ? buildPremiumTrialBillingMeta(hasActivePayment, planState)
+    : {
+        subscriptionState: "free",
+        trialDays: 0,
+        trialStartedAt: null,
+        trialEndsAt: null,
+        trialActive: false,
+        trialExpired: false,
+        isAppLocked: false,
+        showPremiumTrialExpiredModal: false,
+        trialDaysRemaining: null,
+        hasUsedPremiumTrial: false,
+        canStartTrial: false,
+      };
+
   let limits = getPlanLimits(planId);
   let planSlots = null;
   let showPlanDowngradeNotice = false;
@@ -53,29 +100,47 @@ export async function loadShopBillingContext(billing, shop) {
     const synced = await syncShopPlanState(shop, planId);
     limits = synced.limits;
     planSlots = synced.planSlots;
-    showPlanDowngradeNotice = synced.showPlanDowngradeNotice;
+    showPlanDowngradeNotice =
+      synced.showPlanDowngradeNotice && !premiumTrial.showPremiumTrialExpiredModal;
   } else if (planId === APP_PLAN_ID.FREE) {
     planSlots = {
       editableDiscountNames: [],
+      allDiscountNames: [],
       editablePopupIds: [],
       editableAnnouncementHeaderIds: [],
       editableAnnouncementBodyIds: [],
     };
   }
 
+  const subscriptionState = premiumTrial.subscriptionState;
+  const isAppLocked = Boolean(premiumTrial.isAppLocked);
+  const isPremium =
+    planId === APP_PLAN_ID.PREMIUM && !isAppLocked;
+
   return {
     planId,
     planName: planDisplayName(planId),
-    isPremium: planId === APP_PLAN_ID.PREMIUM,
+    isPremium,
+    subscriptionState,
+    isAppLocked,
     limits,
     planSlots,
     showPlanDowngradeNotice,
     isTest,
-    hasActivePayment: check.hasActivePayment,
+    hasActivePayment,
+    premiumTrial,
     appSubscriptions: check.appSubscriptions ?? [],
     activeSubscription,
   };
 }
+
+export { rejectIfAppLocked } from "./guard-app-access.server.js";
+
+export {
+  acknowledgePremiumTrialExpiryFreePlan,
+  startPremiumTrial,
+  cancelPremiumTrial,
+} from "./premium-trial.server.js";
 
 /** @deprecated Prefer planSlots from loadShopBillingContext */
 export async function loadShopPlanSlotsForBilling(shop, planId) {
@@ -103,9 +168,13 @@ export async function countShopPopups(shop) {
 }
 
 export async function countShopTierDiscounts(shop) {
-  if (typeof prisma.tierDiscount?.count === "function") {
+  if (typeof prisma.tierDiscount?.findMany === "function") {
     try {
-      return await prisma.tierDiscount.count({ where: { shop } });
+      const rows = await prisma.tierDiscount.findMany({
+        where: { shop },
+        select: { name: true },
+      });
+      return rows.length;
     } catch {
       /* fall through */
     }
@@ -114,11 +183,40 @@ export async function countShopTierDiscounts(shop) {
     where: { shop },
     select: { discountName: true },
   });
-  return new Set(tiers.map((t) => String(t.discountName || "").trim()).filter(Boolean)).size;
+  const names = new Set(
+    tiers.map((t) => String(t.discountName || "Default Discount").trim()).filter(Boolean),
+  );
+  return names.size;
 }
 
 function upgradeMessage(resourceLabel, limit) {
   return `Your ${planDisplayName(APP_PLAN_ID.FREE)} plan allows up to ${limit} ${resourceLabel}. Upgrade to Premium for unlimited ${resourceLabel}.`;
+}
+
+/** Free plan popups always use All pages targeting. */
+export function clampPopupTargetingForPlan(config, planId) {
+  if (canUsePopupTargeting(planId)) return config;
+  return parsePopupDesignConfig(
+    JSON.stringify({
+      ...config,
+      pageTarget: "all",
+      exactPageUrl: "",
+      customPathContains: "",
+    }),
+  );
+}
+
+/** Blocks non–All pages targeting on the Free plan. */
+export function rejectIfPopupTargetingNotAllowed(planId, pageTarget, exactPageUrl = "") {
+  if (canUsePopupTargeting(planId)) return null;
+  const target = normalizePopupPageTarget(pageTarget);
+  const exact = String(exactPageUrl || "").trim();
+  if (target === "all" && !exact) return null;
+  return {
+    ok: false,
+    error: FREE_PLAN_POPUP_TARGETING_UPGRADE_MESSAGE,
+    planUpgradeRequired: true,
+  };
 }
 
 /** Blocks delete intents on the Free plan (Premium / $5 plan required). */

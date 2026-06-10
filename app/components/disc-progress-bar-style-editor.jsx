@@ -53,7 +53,7 @@ function ShadowCell({ value, onChange }) {
 const TIER_ROWS = [
   { key: "barFill",             label: "Bar fill",     type: "color",  fallback: "#000000" },
   { key: "barTrack",            label: "Bar track",    type: "color",  fallback: "#e5e7eb" },
-  { key: "badgeBackgroundColor", label: "Badge bg",     type: "color",  fallback: "#ffffff" },
+  { key: "badgeBackgroundColor", label: "Badge bg",     type: "color",  fallback: "#c3bbbb" },
   { key: "badgeBorderColor",    label: "Badge border", type: "color",  fallback: "#000000" },
   { key: "iconColor",           label: "Icon color",   type: "color",  fallback: "#000000" },
   // { key: "badgeShadow",         label: "Badge shadow", type: "shadow" },
@@ -155,7 +155,7 @@ export function ProgressBarStyleEditor({
       </div>
       <p className="disc-bar-style-editor-help">
         {badgeOnly
-          ? "Set badge background and icon colors per tier. Before = not yet reached; After = unlocked."
+          ? "Set badge background colors per tier. Before = not yet reached; After = unlocked."
           : "Horizontal bar with scalloped tier badges. \"Before\" applies until the shopper reaches a tier \"After\" once reached."}
       </p>
 

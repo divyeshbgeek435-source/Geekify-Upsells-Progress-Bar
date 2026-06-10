@@ -1,5 +1,23 @@
-import { PrismaClient, Prisma } from "@prisma/client";
+import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
+
+const nodeRequire = createRequire(import.meta.url);
+
+/** Load the Node Prisma engine via CJS `require` so Vite never resolves the browser stub. */
+function loadPrismaModule() {
+  const entry = nodeRequire.resolve("@prisma/client", { paths: [process.cwd()] });
+  return nodeRequire(entry);
+}
+
+let prismaModuleCache;
+function getPrismaModule() {
+  if (!prismaModuleCache) prismaModuleCache = loadPrismaModule();
+  return prismaModuleCache;
+}
+
+function getPrismaNamespace() {
+  return getPrismaModule().Prisma;
+}
 
 const globalForPrisma = globalThis;
 const REQUIRED_DELEGATES = [
@@ -11,11 +29,16 @@ const REQUIRED_DELEGATES = [
   "popupDesign",
   "popupSignup",
   "discount",
+  "shopPlanState",
 ];
+
+/** Bump when ShopPlanState (or other) columns change so dev never keeps a stale DMMF instance. */
+const PRISMA_CACHE_VERSION = "v6_storefrontLock";
 
 /** Busts the dev singleton when `prisma generate` adds/removes fields (cached client would otherwise stay on an old DMMF). */
 function prismaSchemaCacheSignature() {
   try {
+    const Prisma = getPrismaNamespace();
     const sig = JSON.stringify({
       announcementBar: Prisma.AnnouncementBarScalarFieldEnum ?? null,
       announcementBody: Prisma.AnnouncementBodyScalarFieldEnum ?? null,
@@ -25,6 +48,7 @@ function prismaSchemaCacheSignature() {
       session: Prisma.SessionScalarFieldEnum ?? null,
       cartAccessLog: Prisma.CartAccessLogScalarFieldEnum ?? null,
       discount: Prisma.DiscountScalarFieldEnum ?? null,
+      shopPlanState: Prisma.ShopPlanStateScalarFieldEnum ?? null,
     });
     let h = 0;
     for (let i = 0; i < sig.length; i++) {
@@ -36,15 +60,44 @@ function prismaSchemaCacheSignature() {
   }
 }
 
-const PRISMA_KEY = `__cartShopifyPrisma_${prismaSchemaCacheSignature()}`;
+const PRISMA_KEY = `__cartShopifyPrisma_${PRISMA_CACHE_VERSION}_${prismaSchemaCacheSignature()}`;
 
 /**
  * A complete client must include delegates for every model this app uses.
  * If `prisma generate` was never run after adding a model, `new PrismaClient()`
  * still constructs but omits new delegates - we must not cache that instance.
  */
+function shopPlanStateModelFieldNames(client) {
+  const model = client?._runtimeDataModel?.models?.ShopPlanState;
+  if (!model?.fields) return [];
+  return model.fields.map((field) => field.name);
+}
+
+/** PrismaClient snapshots the DMMF at construction; reject singletons from before trial columns existed. */
+function clientHasShopPlanTrialFields(client) {
+  const names = shopPlanStateModelFieldNames(client);
+  return (
+    names.includes("premiumTrialStartedAt") &&
+    names.includes("premiumTrialConsumedAt") &&
+    names.includes("premiumTrialExpiredAt") &&
+    names.includes("premiumSubscriptionActive")
+  );
+}
+
 function clientIsComplete(client) {
-  return getMissingDelegates(client).length === 0;
+  return (
+    getMissingDelegates(client).length === 0 && clientHasShopPlanTrialFields(client)
+  );
+}
+
+function purgeStalePrismaSingletons() {
+  for (const key of Object.getOwnPropertyNames(globalForPrisma)) {
+    if (key.startsWith("__cartShopifyPrisma_") && key !== PRISMA_KEY) {
+      const stale = globalForPrisma[key];
+      if (stale?.$disconnect) stale.$disconnect().catch(() => {});
+      delete globalForPrisma[key];
+    }
+  }
 }
 
 function getMissingDelegates(client) {
@@ -55,6 +108,7 @@ function getMissingDelegates(client) {
 }
 
 function makePrisma() {
+  const { PrismaClient } = getPrismaModule();
   return new PrismaClient();
 }
 
@@ -459,6 +513,7 @@ function buildCompatDelegates(client) {
 }
 
 function getPrisma() {
+  purgeStalePrismaSingletons();
   let client = globalForPrisma[PRISMA_KEY];
   if (!clientIsComplete(client)) {
     if (client) {
@@ -468,10 +523,16 @@ function getPrisma() {
     if (!clientIsComplete(client)) {
       delete globalForPrisma[PRISMA_KEY];
       const missing = getMissingDelegates(client);
+      const shopPlanFields = shopPlanStateModelFieldNames(client);
+      const trialFieldsMissing = !clientHasShopPlanTrialFields(client);
       throw new Error(
-        `Prisma Client is missing required delegates: ${missing.join(", ")}. ` +
+        (missing.length
+          ? `Prisma Client is missing required delegates: ${missing.join(", ")}. `
+          : trialFieldsMissing
+            ? `Prisma Client ShopPlanState is outdated (fields: ${shopPlanFields.join(", ") || "none"}). `
+            : "") +
           "Run `npm exec prisma generate` in the project root and restart the dev server. " +
-          "If you already did that, Vite may have loaded Prisma’s browser stub: keep `ssr.external: [\"@prisma/client\"]` in vite.config.js (see project vite.config.js).",
+          "If you already did that, Vite may have loaded Prisma’s browser stub: keep `ssr.external: [\"@prisma/client\", \".prisma/client\"]` in vite.config.js.",
       );
     }
     globalForPrisma[PRISMA_KEY] = client;

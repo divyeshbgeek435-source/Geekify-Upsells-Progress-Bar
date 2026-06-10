@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -179,10 +179,19 @@ model PopupSignup {
 }
 
 model ShopPlanState {
-  shop                    String   @id
-  lastKnownPlanId         String   @default("free")
-  pendingDowngradeNotice  Boolean  @default(false)
-  updatedAt               DateTime @updatedAt
+  shop                            String    @id
+  lastKnownPlanId                 String    @default("free")
+  pendingDowngradeNotice          Boolean   @default(false)
+  /** Set once when the shop starts its only Premium trial; never cleared. */
+  premiumTrialConsumedAt          DateTime?
+  premiumTrialStartedAt           DateTime?
+  /** Set when the trial period ends; never cleared until Premium is purchased. */
+  premiumTrialExpiredAt           DateTime?
+  /** Mirrored from Shopify billing.check — used on storefront without billing API calls. */
+  premiumSubscriptionActive       Boolean   @default(false)
+  /** @deprecated Use premiumTrialExpiredAt; kept for legacy rows. */
+  pendingPremiumTrialExpiryNotice Boolean   @default(false)
+  updatedAt                       DateTime  @updatedAt
 
   @@map("shop_plan_state")
 }

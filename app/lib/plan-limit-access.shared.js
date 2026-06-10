@@ -57,7 +57,13 @@ export function isWithinPlanLimitIndex(planId, limit, index) {
 /**
  * @param {string} planId
  * @param {import("./app-plans.shared.js").PLAN_LIMITS[typeof APP_PLAN_ID.FREE]} limits
- * @param {{ editableDiscountNames?: string[], editablePopupIds?: string[], editableAnnouncementHeaderIds?: string[], editableAnnouncementBodyIds?: string[] } | null | undefined} planSlots
+ * @param {{
+ *   editableDiscountNames?: string[],
+ *   allDiscountNames?: string[],
+ *   editablePopupIds?: string[],
+ *   editableAnnouncementHeaderIds?: string[],
+ *   editableAnnouncementBodyIds?: string[],
+ * } | null | undefined} planSlots
  */
 export function buildPlanAccess(planId, limits, planSlots) {
   if (isPremiumPlan(planId)) {
@@ -73,6 +79,7 @@ export function buildPlanAccess(planId, limits, planSlots) {
     limits: getPlanLimits(APP_PLAN_ID.FREE),
     slots: planSlots ?? {
       editableDiscountNames: [],
+      allDiscountNames: [],
       editablePopupIds: [],
       editableAnnouncementHeaderIds: [],
       editableAnnouncementBodyIds: [],
@@ -84,14 +91,19 @@ export function buildPlanAccess(planId, limits, planSlots) {
 /**
  * @param {string} planId
  * @param {string} discountName
- * @param {{ editableDiscountNames?: string[] } | null | undefined} planSlots
+ * @param {{ editableDiscountNames?: string[], allDiscountNames?: string[] } | null | undefined} planSlots
  */
 export function isDiscountEditableOnPlan(planId, discountName, planSlots) {
   if (isPremiumPlan(planId)) return true;
   const name = String(discountName || "").trim();
-  if (!name) return false;
+  // Empty name = new discount form, not a locked over-limit row.
+  if (!name) return true;
   const allowed = planSlots?.editableDiscountNames ?? [];
-  return allowed.includes(name);
+  if (allowed.includes(name)) return true;
+  const allKnown = planSlots?.allDiscountNames ?? [];
+  // Names not yet persisted (new create flow) are editable; only over-limit rows stay locked.
+  if (!allKnown.includes(name)) return true;
+  return false;
 }
 
 /**

@@ -1,5 +1,9 @@
 import prisma from "../db.server";
 import { prismaShopInClause, shopVariantsForLookup } from "./app-proxy.server.js";
+import {
+  buildStorefrontDisabledPayload,
+  resolveStorefrontAccessContext,
+} from "./storefront-access.server.js";
 import { mergeProgressBarDesign } from "./progress-bar-design.js";
 import {
   resolveDiscountStatus,
@@ -101,6 +105,11 @@ export async function buildStorefrontCartAccessPayload(
     return { ok: false, error: "missing_shop" };
   }
 
+  const access = await resolveStorefrontAccessContext(shop, now);
+  if (!access.storefrontEnabled) {
+    return buildStorefrontDisabledPayload(shop, access.subscriptionState);
+  }
+
   const exp = currencyExponent(currency);
 
   try {
@@ -179,6 +188,8 @@ export async function buildStorefrontCartAccessPayload(
 
   return {
     ok: true,
+    storefrontEnabled: true,
+    subscriptionState: access.subscriptionState,
     service: "sce-cart-access",
     shop,
     tiers: visibleTiers,

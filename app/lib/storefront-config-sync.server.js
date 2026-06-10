@@ -108,6 +108,7 @@ export async function syncStorefrontConfigToShopMetafield(admin, shop) {
 
   console.info("[sce-storefront-sync] ok", {
     shop,
+    storefrontEnabled: payload.storefrontEnabled !== false,
     tierCount: Array.isArray(payload.tiers) ? payload.tiers.length : 0,
   });
   return { ok: true };

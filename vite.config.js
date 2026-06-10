@@ -1,6 +1,14 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { reactRouter } from "@react-router/dev/vite";
 import { defineConfig } from "vite";
 import tsconfigPaths from "vite-tsconfig-paths";
+
+const projectRoot = path.dirname(fileURLToPath(import.meta.url));
+const prismaClientNodeEntry = path.join(
+  projectRoot,
+  "node_modules/.prisma/client/default.js",
+);
 
 // Related: https://github.com/remix-run/remix/issues/2835#issuecomment-1144102176
 // Replace the HOST env var with SHOPIFY_APP_URL so that it doesn't break the Vite server.
@@ -38,8 +46,14 @@ if (host === "localhost") {
 export default defineConfig({
   // Prisma must load the Node client (`.prisma/client/default`), not `index-browser.js`,
   // or delegates like `announcementBar.findMany` are missing and db.server throws.
+  resolve: {
+    alias: {
+      "@prisma/client": prismaClientNodeEntry,
+    },
+    conditions: ["node", "import", "module", "default"],
+  },
   ssr: {
-    external: ["@prisma/client"],
+    external: ["@prisma/client", ".prisma/client"],
     resolve: {
       conditions: ["node", "import", "module", "default"],
       /** Prefer the Node engine for externals (avoids the browser `Prisma = {}` stub). */

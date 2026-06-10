@@ -13,8 +13,10 @@ import {
   PLAN_CATALOG,
   PREMIUM_PLAN_BILLING_KEY,
   PREMIUM_PLAN_PRICE_USD,
+  getPremiumTrialDays,
 } from "../lib/app-plans.shared.js";
 import {
+  acknowledgePremiumTrialExpiryFreePlan,
   billingReturnUrl,
   billingUsesTestMode,
   countShopAnnouncementBodies,
@@ -22,11 +24,26 @@ import {
   countShopPopups,
   countShopTierDiscounts,
   loadShopBillingContext,
+  startPremiumTrial,
 } from "../lib/app-billing.server.js";
+import { guardAppAdminMutation } from "../lib/guard-app-access.server.js";
+import { syncStorefrontConfigToShopMetafield } from "../lib/storefront-config-sync.server.js";
+import { PremiumTrialLockModal } from "../components/app-trial-lock.jsx";
+import {
+  SUBSCRIPTION_STATE,
+  subscriptionStateLabel,
+} from "../lib/subscription-state.shared.js";
 
 export const loader = async ({ request }) => {
-  const { billing, session } = await authenticate.admin(request);
+  const { billing, session, admin } = await authenticate.admin(request);
   const billingCtx = await loadShopBillingContext(billing, session.shop);
+  if (billingCtx.hasActivePayment) {
+    try {
+      await syncStorefrontConfigToShopMetafield(admin, session.shop);
+    } catch (e) {
+      console.warn("[billing] storefront metafield sync failed", e?.message);
+    }
+  }
   const shop = session.shop;
   const [announcementHeaders, announcementBodies, popupCount, discountCount] =
     await Promise.all([
@@ -50,10 +67,56 @@ export const loader = async ({ request }) => {
 };
 
 export const action = async ({ request }) => {
-  const { billing } = await authenticate.admin(request);
   const form = await request.formData();
   const intent = String(form.get("intent") || "");
+  const allowWhenLocked = intent === "subscribe" || intent === "choose-free-plan";
+  const guard = await guardAppAdminMutation(request, { allowWhenLocked });
+  if (guard.blocked) return guard.response;
+  const { billing, session, billingPlan, admin } = guard;
   const isTest = billingUsesTestMode();
+
+  if (intent === "choose-free-plan") {
+    if (!billingPlan.isAppLocked) {
+      return { ok: false, error: "No plan choice is required right now." };
+    }
+    const result = await acknowledgePremiumTrialExpiryFreePlan(session.shop);
+    if (!result.ok) {
+      return { ok: false, error: result.error };
+    }
+    try {
+      await syncStorefrontConfigToShopMetafield(admin, session.shop);
+    } catch (e) {
+      console.warn("[billing] storefront unlock metafield sync failed", e?.message);
+    }
+    return {
+      ok: true,
+      intent: "choose-free-plan",
+      message:
+        "You are now on the Free plan. Premium trial features above Free limits are no longer available.",
+    };
+  }
+
+  if (intent === "start-trial") {
+    if (billingPlan.isAppLocked) {
+      return { ok: false, error: "Upgrade to Premium to restore access." };
+    }
+    const check = await billing.check({
+      plans: [PREMIUM_PLAN_BILLING_KEY],
+      isTest,
+    });
+    if (check.hasActivePayment) {
+      return { ok: false, error: "You already have an active Premium subscription." };
+    }
+    const result = await startPremiumTrial(session.shop);
+    if (!result.ok) {
+      return { ok: false, error: result.error };
+    }
+    return {
+      ok: true,
+      intent: "start-trial",
+      message: `Your ${getPremiumTrialDays()}-day Premium free trial has started.`,
+    };
+  }
 
   if (intent === "subscribe") {
     return billing.request({
@@ -86,7 +149,18 @@ export const action = async ({ request }) => {
   return { ok: false, error: "Unknown action." };
 };
 
-function PlanCard({ plan, currentPlanId, isPremium, premiumPriceUsd }) {
+function PlanCard({
+  plan,
+  currentPlanId,
+  isPremium,
+  premiumPriceUsd,
+  trialDays,
+  trialActive,
+  trialDaysRemaining,
+  hasActivePayment,
+  canStartTrial,
+  isAppLocked,
+}) {
   const isCurrent = plan.id === currentPlanId;
   const isPaidPlan = plan.id === APP_PLAN_ID.PREMIUM;
 
@@ -158,11 +232,23 @@ function PlanCard({ plan, currentPlanId, isPremium, premiumPriceUsd }) {
         <s-button type="button" variant="secondary" disabled>
           Current plan
         </s-button>
-      ) : isPaidPlan && !isPremium ? (
+      ) : isPaidPlan && trialActive ? (
+        <s-text tone="success">
+          Premium trial active
+          {trialDaysRemaining != null ? ` — ${trialDaysRemaining} day(s) left` : ""}.
+        </s-text>
+      ) : canStartTrial ? (
+        <Form method="post">
+          <input type="hidden" name="intent" value="start-trial" />
+          <s-button type="submit" variant="primary">
+            Start {trialDays}-day free trial
+          </s-button>
+        </Form>
+      ) : isPaidPlan && (isAppLocked || (!isPremium && !canStartTrial && !hasActivePayment)) ? (
         <Form method="post">
           <input type="hidden" name="intent" value="subscribe" />
           <s-button type="submit" variant="primary">
-            Upgrade to Premium - ${premiumPriceUsd}/mo
+            {isAppLocked ? "Upgrade to Premium" : "Subscribe to Premium"} — ${premiumPriceUsd}/mo
           </s-button>
         </Form>
       ) : isPaidPlan ? null : (
@@ -192,11 +278,46 @@ export default function BillingPage() {
     [location.search],
   );
 
-  const { planId, planName, isPremium, limits, isTest, usage, plans, premiumPriceUsd } =
-    data;
+  const {
+    planId,
+    planName,
+    isPremium,
+    limits,
+    isTest,
+    usage,
+    plans,
+    premiumPriceUsd,
+    premiumTrial,
+    hasActivePayment,
+    subscriptionState,
+    isAppLocked,
+  } = data;
+
+  const trialDays = premiumTrial?.trialDays ?? getPremiumTrialDays();
 
   return (
     <s-page heading="Pricing & plans">
+      <PremiumTrialLockModal
+        locked={Boolean(isAppLocked)}
+        premiumPriceUsd={premiumPriceUsd}
+        formAction="/app/billing"
+        billingPath="/app/billing"
+      />
+      {isAppLocked ? (
+        <s-banner tone="warning" heading="Trial ended — choose a plan">
+          Continue on the Free plan or upgrade to Premium to keep using the app. Your one-time
+          free trial cannot be restarted.
+        </s-banner>
+      ) : null}
+      {subscriptionState ? (
+        <s-banner tone="info" heading="Subscription status">
+          {subscriptionStateLabel(subscriptionState)}
+          {subscriptionState === SUBSCRIPTION_STATE.TRIAL_ACTIVE &&
+          premiumTrial?.trialDaysRemaining != null
+            ? ` — ${premiumTrial.trialDaysRemaining} day(s) remaining.`
+            : ""}
+        </s-banner>
+      ) : null}
       {isTest ? (
         <s-banner tone="info" heading="Test billing mode">
           Charges are in test mode (no real card charges). Set{" "}
@@ -252,12 +373,18 @@ export default function BillingPage() {
               currentPlanId={planId}
               isPremium={isPremium}
               premiumPriceUsd={premiumPriceUsd}
+              trialDays={trialDays}
+              trialActive={Boolean(premiumTrial?.trialActive)}
+              trialDaysRemaining={premiumTrial?.trialDaysRemaining ?? null}
+              hasActivePayment={Boolean(hasActivePayment)}
+              canStartTrial={Boolean(premiumTrial?.canStartTrial)}
+              isAppLocked={Boolean(isAppLocked)}
             />
           ))}
         </div>
       </s-section>
 
-      {isPremium ? (
+      {isPremium && hasActivePayment ? (
         <s-section heading="Manage subscription">
           <s-stack direction="block" gap="small">
             <s-text tone="neutral">

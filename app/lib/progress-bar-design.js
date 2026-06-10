@@ -22,7 +22,7 @@ function defaultTierPhaseStyle(phase) {
   const inactive = {
     barFill: "",
     barTrack: "",
-    badgeBackgroundColor: "#ffffff",
+    badgeBackgroundColor: "#c3bbbb",
     badgeBorderColor: "#000000",
     badgeShadow: "0 0 0 2px #ffffff, 0 2px 10px rgba(0,0,0,0.08)",
     iconColor: "#000000",
