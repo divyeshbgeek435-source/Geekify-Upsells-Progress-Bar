@@ -11,6 +11,7 @@ import {
   PREMIUM_PLAN_CURRENCY,
   PREMIUM_PLAN_PRICE_USD,
 } from "./lib/app-plans.shared.js";
+import { resolveShopifyAppUrl } from "./lib/shopify-config.server.js";
 import prisma from "./db.server";
 
 const shopify = shopifyApp({
@@ -18,7 +19,7 @@ const shopify = shopifyApp({
   apiSecretKey: process.env.SHOPIFY_API_SECRET || "",
   apiVersion: ApiVersion.October25,
   scopes: process.env.SCOPES?.split(","),
-  appUrl: process.env.SHOPIFY_APP_URL || "",
+  appUrl: resolveShopifyAppUrl(),
   authPathPrefix: "/auth",
   sessionStorage: new PrismaSessionStorage(prisma),
   distribution: AppDistribution.AppStore,

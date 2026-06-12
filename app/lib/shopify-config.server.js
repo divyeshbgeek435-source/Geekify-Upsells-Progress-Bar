@@ -25,3 +25,17 @@ export function getShopifyAppClientId() {
     "";
   return fromEnv || readClientIdFromToml();
 }
+
+/** SHOPIFY_APP_URL, or Railway's auto-injected public URL when unset. */
+export function resolveShopifyAppUrl() {
+  const explicit = process.env.SHOPIFY_APP_URL?.trim();
+  if (explicit) return explicit.replace(/\/$/, "");
+
+  const railwayStatic = process.env.RAILWAY_STATIC_URL?.trim();
+  if (railwayStatic) return railwayStatic.replace(/\/$/, "");
+
+  const railwayDomain = process.env.RAILWAY_PUBLIC_DOMAIN?.trim();
+  if (railwayDomain) return `https://${railwayDomain}`;
+
+  return "";
+}
