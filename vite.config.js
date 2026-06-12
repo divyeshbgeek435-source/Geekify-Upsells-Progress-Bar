@@ -78,5 +78,6 @@ export default defineConfig({
   },
   optimizeDeps: {
     include: ["@shopify/app-bridge-react"],
+    exclude: ["@prisma/client", ".prisma/client"],
   },
 });

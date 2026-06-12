@@ -1,1 +1,1 @@
-DATABASE_URL="file:./dev.db"
+DATABASE_URL="postgres://7c25f49f3fa4325971d39f1be8000159d4b05349ced747c201f6f365418fd4d6:sk_071bAiLatDMGzqJZndDKT@pooled.db.prisma.io:5432/postgres?sslmode=require"
