@@ -26,16 +26,27 @@ export function getShopifyAppClientId() {
   return fromEnv || readClientIdFromToml();
 }
 
+function normalizeAppUrl(value) {
+  const trimmed = value?.trim();
+  if (!trimmed) return "";
+
+  const withProtocol = /^https?:\/\//i.test(trimmed)
+    ? trimmed
+    : `https://${trimmed}`;
+
+  return withProtocol.replace(/\/$/, "");
+}
+
 /** SHOPIFY_APP_URL, or Railway's auto-injected public URL when unset. */
 export function resolveShopifyAppUrl() {
-  const explicit = process.env.SHOPIFY_APP_URL?.trim();
-  if (explicit) return explicit.replace(/\/$/, "");
+  const explicit = normalizeAppUrl(process.env.SHOPIFY_APP_URL);
+  if (explicit) return explicit;
 
-  const railwayStatic = process.env.RAILWAY_STATIC_URL?.trim();
-  if (railwayStatic) return railwayStatic.replace(/\/$/, "");
+  const railwayStatic = normalizeAppUrl(process.env.RAILWAY_STATIC_URL);
+  if (railwayStatic) return railwayStatic;
 
-  const railwayDomain = process.env.RAILWAY_PUBLIC_DOMAIN?.trim();
-  if (railwayDomain) return `https://${railwayDomain}`;
+  const railwayDomain = normalizeAppUrl(process.env.RAILWAY_PUBLIC_DOMAIN);
+  if (railwayDomain) return railwayDomain;
 
   return "";
 }
