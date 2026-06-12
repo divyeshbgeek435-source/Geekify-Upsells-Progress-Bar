@@ -2,7 +2,7 @@
 
 client_id = "d52df8a54fe62735aa43d2b16e0da577"
 name = "Geekify: Upsells, Progress Bar"
-application_url = "https://geekify-upsells-progress-bar-production.up.railway.app"
+application_url = "https://geekify-upsells-progress-bar.onrender.com"
 embedded = true
 
 [build]
@@ -40,4 +40,4 @@ access.admin = "merchant_read_write"
 access.storefront = "public_read"
 
 [auth]
-redirect_urls = [ "https://geekify-upsells-progress-bar-production.up.railway.app/auth/callback" ]
+redirect_urls = [ "https://geekify-upsells-progress-bar.onrender.com/auth/callback" ]
